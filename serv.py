@@ -6,14 +6,7 @@ HOST = 'localhost'
 PORT = 3490
 
 
-def http_handler(client_socket :socket):
-    request = client_socket.recv(1024)
-    data = request.decode()
-    # print(f"data recieved = {data}")
-    req = data.split("\r\n")
-    print(req)
-   # print(f"method : {method}, path :{path} ,HTTP-Version : {version}")
-    return data;
+from http_parser import http_handler
 
 # 1. Resolve address and create the server socket
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
@@ -60,30 +53,44 @@ if server_socket is None:
 # main
 
 sel = selectors.DefaultSelector()
-sel.register(server_socket, selectors.EVENT_READ, data=None)    
+sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
+sel.register(server_socket, selectors.EVENT_READ, data="listener")    
 while True:
     events = sel.select(timeout=None)
     for key, _ in events:
-        if key.data is None:
+        if key.data is "listener":
             new_sock_for_comms , addr = ip_check(key.fileobj)
             new_sock_for_comms .setblocking(False)
 
-            sel.register(new_sock_for_comms , selectors.EVENT_READ, data=addr)
+            sel.register(new_sock_for_comms , selectors.EVENT_READ, data={"buffer":b""})
+        elif key.data is "stdin":
+            line = sys.stdin.readline()
+            for other_key in list(sel.get_map().values()):
+                 if isinstance(other_key.data, dict):   # a real client conn
+                      other_key.fileobj.sendall(line.encode())
         else:
-            
-            client_ip = key.data[0]
-            data=http_handler(key.fileobj)
-            
-            
-            if data:
-               # print(f"Received data from {addr}: {data}")
-                sock = key.fileobj
-                if sock!=server_socket and sock!=new_sock_for_comms:
-                   key.fileobj.sendall(data)  # Echo back the received data
-            else:
-                print(f"Closing connection to {addr}")
-                sel.unregister(key.fileobj)
-                key.fileobj.close()
+            conn = key.data
+            client_sock = key.fileobj
+
+            try:
+                chunk = client_sock.recv(1024)
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                chunk = b""
+            print(f"utf-8 decoded chunk: {chunk.decode()}")
+
+
+            if not chunk:
+                sel.unregister(client_sock)
+                client_sock.close()
+                continue
+
+            conn["buffer"] += chunk
+            result = http_handler(conn["buffer"])
+
+            if result is not None:
+                client_sock.send(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi')
+                
+
                 
 
 
