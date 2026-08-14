@@ -6,6 +6,15 @@ HOST = 'localhost'
 PORT = 3490
 
 
+def http_handler(client_socket :socket):
+    request = client_socket.recv(1024)
+    data = request.decode()
+    # print(f"data recieved = {data}")
+    req = data.split("\r\n")
+    print(req)
+   # print(f"method : {method}, path :{path} ,HTTP-Version : {version}")
+    return data;
+
 # 1. Resolve address and create the server socket
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
 
@@ -25,6 +34,7 @@ def ip_check(server_socket):
           
 def set_up():
     new_socket = None
+    # Fix: unpacking 5 variables
     for family, socktype, proto, canonname, sockaddr in addr_info:
         try:
            new_socket = socket.socket(family, socktype, proto)
@@ -62,18 +72,22 @@ while True:
         else:
             
             client_ip = key.data[0]
-            data = key.fileobj.recv(1024)
-
+            data=http_handler(key.fileobj)
+            
+            
             if data:
-                print(f"Received data from {addr}: {data.decode()}")
+               # print(f"Received data from {addr}: {data}")
                 sock = key.fileobj
-               if sock!=server_socket and sock!=new_sock_for_comms:
-                key.fileobj.sendall(data)  # Echo back the received data
+                if sock!=server_socket and sock!=new_sock_for_comms:
+                   key.fileobj.sendall(data)  # Echo back the received data
             else:
                 print(f"Closing connection to {addr}")
                 sel.unregister(key.fileobj)
                 key.fileobj.close()
+                
 
 
 
+
+     
 
