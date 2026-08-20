@@ -6,8 +6,13 @@ HOST = 'localhost'
 PORT = 3490
 
 
-from http_parser import http_handler
-
+from http_parser import (
+    http_handler,
+    handle_index,
+    handle_get_messages,
+    handle_post_messages,
+    handle_404,
+)
 # 1. Resolve address and create the server socket
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
 
@@ -52,18 +57,29 @@ if server_socket is None:
 
 # main
 
+# Routes
+
+routes_dict = {
+    ("GET",b"/") : handle_index ,
+    ("GET",b"/messages") : handle_get_messages,
+    ("POST",b"/messages") : handle_post_messages,
+    
+}
+
+
+
 sel = selectors.DefaultSelector()
 sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
 sel.register(server_socket, selectors.EVENT_READ, data="listener")    
 while True:
     events = sel.select(timeout=None)
     for key, _ in events:
-        if key.data is "listener":
+        if key.data == "listener":
             new_sock_for_comms , addr = ip_check(key.fileobj)
             new_sock_for_comms .setblocking(False)
 
             sel.register(new_sock_for_comms , selectors.EVENT_READ, data={"buffer":b""})
-        elif key.data is "stdin":
+        elif key.data == "stdin":
             line = sys.stdin.readline()
             for other_key in list(sel.get_map().values()):
                  if isinstance(other_key.data, dict):   # a real client conn
@@ -85,15 +101,23 @@ while True:
                 continue
 
             conn["buffer"] += chunk
-            result = http_handler(conn["buffer"])
+            req_dict = http_handler(conn["buffer"])
 
-            if result is not None:
-                client_sock.send(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi')
+            if req_dict is not None:
+                method = req_dict["method"].decode()
+                path = req_dict["path"]
+                handler_func = routes_dict.get((method, path), handle_404)
+
+                status, headers, body = handler_func(req_dict)
+                response = build_response(status, headers, body)  # still need to write this
+                client_sock.send(response)
+
+            else:
+                pass  # not a full request yet — just wait for the next recv()
+
+        
+
+    
+
                 
-
                 
-
-
-
-
-     
