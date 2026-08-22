@@ -12,6 +12,7 @@ from http_parser import (
     handle_get_messages,
     handle_post_messages,
     handle_404,
+    build_response
 )
 # 1. Resolve address and create the server socket
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
@@ -111,6 +112,7 @@ while True:
                 status, headers, body = handler_func(req_dict)
                 response = build_response(status, headers, body)  # still need to write this
                 client_sock.send(response)
+                print(build_response(200, {"Content-Type": "text/plain"}, b"hi"))
 
             else:
                 pass  # not a full request yet — just wait for the next recv()
