@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>test</title>
+</head>
+<body>
+    <h1>server alive</h1>
+
+    <input type="text" id="msgInput">
+    <button onclick="sendPost()">POST /messages</button>
+    <a href="/messages" target="_blank"><button>GET /messages</button></a>
+
+    <script>
+        function sendPost() {
+            const text = document.getElementById('msgInput').value;
+            fetch('/messages', { method: 'POST', body: text })
+                .then(r => console.log('status:', r.status));
+        }
+    </script>
+</body>
+</html>
