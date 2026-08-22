@@ -55,3 +55,20 @@ def handle_post_messages(req):
 
 def handle_404(req):
     return 404, {"Content-Type": "text/plain"}, b"not found"
+
+def build_response(status,headers,body):
+    status_phrases = {
+        200: "OK",
+        201: "Created",
+        404: "Not Found",
+        500: "Internal Server Error"
+    }
+    phrase = status_phrases.get(status,"unknown")
+    response_line = f"HTTP/1.1 {status},{phrase}\r\n"
+    headers = dict(headers)
+    headers["Content-Length"] = str(len(body))
+    response_line = f"HTTP/1.1 {status},{phrase}\r\n"
+    headers_line="".join(f"{k}:{v}" for k,v in headers.items())
+    return (response_line + headers_line + "/r/n").encode + body
+
+
