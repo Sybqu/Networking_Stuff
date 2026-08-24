@@ -1,4 +1,4 @@
-fake_messages = ["Hello", "fake", "testing"]
+0.fake_messages = ["Hello", "fake", "testing"]
 
 
 def http_handler(request: bytes) -> dict | None:
@@ -23,6 +23,8 @@ def http_handler(request: bytes) -> dict | None:
         headers_dict[header.strip()] = value.strip()
 
     http_dict["headers"] = headers_dict
+
+# WS HANDSHAKE
 
     # body parsing (POST)
     if http_dict["method"] == b"POST":
