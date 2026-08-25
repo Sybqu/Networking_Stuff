@@ -1,4 +1,6 @@
-0.fake_messages = ["Hello", "fake", "testing"]
+fake_messages = ["Hello", "fake", "testing"]
+import base64
+import hashlib
 
 
 def http_handler(request: bytes) -> dict | None:
@@ -72,5 +74,38 @@ def build_response(status,headers,body):
     response_line = f"HTTP/1.1 {status},{phrase}\r\n"
     headers_line="".join(f"{k}:{v}" for k,v in headers.items())
     return (response_line + headers_line + "/r/n").encode + body
+
+def is_ws(request: bytes):
+    incoming_request = http_handler(request)
+    if incoming_request["method"] == b"GET":
+        upg_val = incoming_request["headers"].get(b"Upgrade",b"")
+        if upg_val.lower() == b"websocket":
+            return True
+    return False  
+
+def ws_upgrade(request: bytes):
+    ws_req = http_handler(request)
+    sec_ws_key = ws_req["headers"].get(b"Sec-WebSocket-Key",b"")
+    GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    combined = sec_ws_key + GUID 
+    sha1_hash = hashlib.sha1(combined).digest()
+    accept_bytes =  base64.b64encode(sha1_hash)
+    accept_bytes.decode('utf-8')
+
+
+
+## OOPS approach?
+
+
+
+
+
+
+
+
+
+
+
+    
 
 
