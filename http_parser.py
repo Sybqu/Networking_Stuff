@@ -1,4 +1,3 @@
-# Yo commit not updating what the fak
 fake_messages = ["Hello", "fake", "testing"]
 import base64
 import hashlib
@@ -43,22 +42,22 @@ def http_handler(request: bytes) -> dict | None:
     return http_dict
 
 
-def handle_index(req):
+def handle_index(req_dict : dict):
     with open("index.html", "rb") as f:
         body = f.read()
     return 200, {"Content-Type": "text/html"}, body
 
 
-def handle_get_messages(req):
+def handle_get_messages(req_dict : dict):
     body = "\n".join(fake_messages).encode()
     return 200, {"Content-Type": "text/plain"}, body
 
 
-def handle_post_messages(req):
+def handle_post_messages(req_dict : dict):
     fake_messages.append(req["body"].decode())
     return 201, {}, b"message received"
 
-def handle_404(req):
+def handle_404(req_dict : dict):
     return 404, {"Content-Type": "text/plain"}, b"not found"
 
 def build_response(status,headers,body):
@@ -66,32 +65,37 @@ def build_response(status,headers,body):
         200: "OK",
         201: "Created",
         404: "Not Found",
-        500: "Internal Server Error"
+        500: "Internal Server Error",
+        101: "Switching Protocols"
     }
     phrase = status_phrases.get(status,"unknown")
     response_line = f"HTTP/1.1 {status},{phrase}\r\n"
     headers = dict(headers)
     headers["Content-Length"] = str(len(body))
-    response_line = f"HTTP/1.1 {status},{phrase}\r\n"
-    headers_line="".join(f"{k}:{v}" for k,v in headers.items())
-    return (response_line + headers_line + "/r/n").encode + body
+    response_line = f"HTTP/1.1 {status} {phrase}\r\n"
+    headers_line="".join(f"{k}: {v}\r\n" for k,v in headers.items())
+    return (response_line + headers_line + "\r\n").encode() + body
 
-def is_ws(request: bytes):
-    incoming_request = http_handler(request)
-    if incoming_request["method"] == b"GET":
-        upg_val = incoming_request["headers"].get(b"Upgrade",b"")
+def is_ws(req_dict : dict):
+    if req_dict["method"] == b"GET":
+        upg_val = req_dict["headers"].get(b"Upgrade",b"")
         if upg_val.lower() == b"websocket":
             return True
     return False  
 
-def ws_upgrade(request: bytes):
-    ws_req = http_handler(request)
-    sec_ws_key = ws_req["headers"].get(b"Sec-WebSocket-Key",b"")
+def ws_upgrade(req_dict: dict):
+    sec_ws_key = req_dict["headers"].get(b"Sec-WebSocket-Key", b"")
     GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    combined = sec_ws_key + GUID 
+    combined = sec_ws_key + GUID
     sha1_hash = hashlib.sha1(combined).digest()
-    accept_bytes =  base64.b64encode(sha1_hash)
-    accept_bytes.decode('utf-8')
+    accept_str = base64.b64encode(sha1_hash).decode('utf-8')
+    body = b""
+    return 101, {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Accept": accept_str}, body
+
+
+    
+
+
 
 
 
