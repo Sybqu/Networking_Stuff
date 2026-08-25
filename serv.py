@@ -12,7 +12,9 @@ from http_parser import (
     handle_get_messages,
     handle_post_messages,
     handle_404,
-    build_response
+    build_response,
+    is_ws,
+    ws_upgrade
 )
 # 1. Resolve address and create the server socket
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
@@ -104,15 +106,22 @@ while True:
             conn["buffer"] += chunk
             req_dict = http_handler(conn["buffer"])
 
+            
             if req_dict is not None:
-                method = req_dict["method"].decode()
-                path = req_dict["path"]
-                handler_func = routes_dict.get((method, path), handle_404)
-
-                status, headers, body = handler_func(req_dict)
-                response = build_response(status, headers, body)  # still need to write this
-                client_sock.send(response)
-                print(build_response(200, {"Content-Type": "text/plain"}, b"hi"))
+                if is_ws(req_dict) is True:
+                    status,headers,body = ws_upgrade(req_dict)
+                    response = build_response(status,headers,body)
+                    print(response)
+                    client_sock.send(response)
+                    conn["mode"]="ws"
+                else:
+                    method = req_dict["method"].decode()
+                    path = req_dict["path"]
+                    handler_func = routes_dict.get((method, path), handle_404)
+                    status, headers, body = handler_func(req_dict)
+                    response = build_response(status, headers, body)  # still need to write this
+                    client_sock.send(response)
+                    print(build_response(200, {"Content-Type": "text/plain"}, b"hi"))
 
             else:
                 pass  # not a full request yet — just wait for the next recv()
