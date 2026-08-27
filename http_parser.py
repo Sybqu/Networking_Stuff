@@ -92,123 +92,67 @@ def ws_upgrade(req_dict: dict):
     body = b""
     return 101, {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Accept": accept_str}, body
 
-import random
+import struct
+import struct
 
-def generate_adventurer():
-    names = [
-        "Kael", "Mira", "Zorin", "Vexa", "Borin",
-        "Nyx", "Ragnar", "Lumi", "Drax", "Sera"
-    ]
+def ws_parse_frame(data: bytes) -> tuple[int, bytearray] | None:
+    if len(data) < 2:
+        return None  # not even the first 2 bytes yet
 
-    classes = [
-        "Engineer", "Wizard", "Rogue",
-        "Berserker", "Alchemist", "Goblin Accountant"
-    ]
+    byte0 = data[0]
+    byte1 = data[1]
 
-    weapons = [
-        "Rusty Sword", "Overclocked Laptop",
-        "Ancient Spear", "Suspicious Stick",
-        "Plasma Wrench", "Emotional Support Rock"
-    ]
+    FIN = (byte0 & 0b10000000) >> 7
+    opcode = (byte0 & 0b00001111)
 
-    quests = [
-        "Defeat the dungeon boss",
-        "Find the missing sandwich",
-        "Debug the ancient machine",
-        "Rescue the village chickens",
-        "Steal the wizard's Wi-Fi password",
-        "Figure out what that noise was"
-    ]
+    MASK_bit = (byte1 & 0b10000000) >> 7
+    payload_len = (byte1 & 0b01111111)
 
-    name = random.choice(names)
-    player_class = random.choice(classes)
-    weapon = random.choice(weapons)
+    if payload_len == 126:
+        if len(data) < 4:
+            return None  # extended length bytes haven't arrived yet
+        actual_len = struct.unpack(">H", data[2:4])[0]
+        mask_key = data[4:8]
+        payload_start = 8
 
-    level = random.randint(1, 50)
-    strength = random.randint(5, 100)
-    intelligence = random.randint(5, 100)
-    agility = random.randint(5, 100)
-    luck = random.randint(1, 100)
+    elif payload_len == 127:
+        if len(data) < 10:
+            return None  # extended length bytes haven't arrived yet
+        actual_len = struct.unpack(">Q", data[2:10])[0]
+        mask_key = data[10:14]
+        payload_start = 14
 
-    health = 100 + strength * 2
-    mana = 50 + intelligence
-    gold = random.randint(10, 5000)
-
-    inventory = random.sample(
-        weapons + [
-            "Potion", "Bread", "Broken Compass",
-            "Mysterious Key", "Three Rocks",
-            "Expired Cheese", "USB Drive"
-        ],
-        k=5
-    )
-
-    active_quests = random.sample(quests, k=3)
-
-    power_score = (
-        strength * 0.35 +
-        intelligence * 0.30 +
-        agility * 0.20 +
-        luck * 0.15
-    )
-
-    if power_score >= 80:
-        rank = "ABSOLUTE UNIT"
-    elif power_score >= 60:
-        rank = "Elite"
-    elif power_score >= 40:
-        rank = "Competent"
-    elif power_score >= 20:
-        rank = "Questionable"
     else:
-        rank = "Please Run"
+        actual_len = payload_len
+        mask_key = data[2:6]
+        payload_start = 6
 
-    print("\n===== ADVENTURER PROFILE =====")
-    print(f"Name:       {name}")
-    print(f"Class:      {player_class}")
-    print(f"Level:      {level}")
-    print(f"Rank:       {rank}")
-    print(f"Weapon:     {weapon}")
-    print(f"Health:     {health}")
-    print(f"Mana:       {mana}")
-    print(f"Gold:       {gold} coins")
-    print(f"Power:      {power_score:.1f}")
-    print("\n--- STATS ---")
-    print(f"Strength:   {strength}")
-    print(f"Intellect:  {intelligence}")
-    print(f"Agility:    {agility}")
-    print(f"Luck:       {luck}")
+    if len(data) < payload_start + actual_len:
+        return None  # full payload hasn't arrived yet — wait for more recv()
 
-    print("\n--- INVENTORY ---")
-    for item in inventory:
-        print(f"- {item}")
+    masked_payload = data[payload_start:payload_start + actual_len]
 
-    print("\n--- ACTIVE QUESTS ---")
-    for i, quest in enumerate(active_quests, 1):
-        print(f"{i}. {quest}")
+    unmasked = bytearray(len(masked_payload))
+    for i in range(len(masked_payload)):
+        unmasked[i] = masked_payload[i] ^ mask_key[i % 4]
 
-    print("\nStatus:", random.choice([
-        "Ready for battle.",
-        "Probably should sleep.",
-        "Hungry but operational.",
-        "Questioning life choices.",
-        "Dangerously overconfident."
-    ]))
+    return (opcode, unmasked)
 
-    return {
-        "name": name,
-        "class": player_class,
-        "level": level,
-        "rank": rank,
-        "power": round(power_score, 1),
-        "inventory": inventory,
-        "quests": active_quests
-    }
+
+def ws_build_frame(opcode: int, payload: bytes) -> bytes:
+    # server → client frames are NEVER masked — simpler than parsing
+    # 1. build byte0: FIN=1 in top bit, opcode in bottom 4 bits
+    # 2. build byte1 + any extended length bytes based on len(payload)
+    #    (no mask bit set, since you're not masking)
+    # 3. return header_bytes + payload (unmasked, straight through)
+    ...
+
+
 
     
 
 
-# INSERT WS FRAME PARSING MAKE JS TEST SCRIPT AND ALL SET??? FALLAHICY
+
 
 
 ## OOPS approach?
