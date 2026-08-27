@@ -1,6 +1,8 @@
 fake_messages = ["Hello", "fake", "testing"]
 import base64
 import hashlib
+import struct
+
 
 
 def http_handler(request: bytes) -> dict | None:
@@ -92,8 +94,6 @@ def ws_upgrade(req_dict: dict):
     body = b""
     return 101, {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Accept": accept_str}, body
 
-import struct
-import struct
 
 def ws_parse_frame(data: bytes) -> tuple[int, bytearray] | None:
     if len(data) < 2:
@@ -136,17 +136,23 @@ def ws_parse_frame(data: bytes) -> tuple[int, bytearray] | None:
     for i in range(len(masked_payload)):
         unmasked[i] = masked_payload[i] ^ mask_key[i % 4]
 
-    return (opcode, unmasked)
-
+    return (opcode, unmasked, payload_start + actual_len)
 
 def ws_build_frame(opcode: int, payload: bytes) -> bytes:
-    # server → client frames are NEVER masked — simpler than parsing
-    # 1. build byte0: FIN=1 in top bit, opcode in bottom 4 bits
-    # 2. build byte1 + any extended length bytes based on len(payload)
-    #    (no mask bit set, since you're not masking)
-    # 3. return header_bytes + payload (unmasked, straight through)
-    ...
+    byte0 = (1 << 7) | opcode  # FIN=1, combined with opcode
 
+    length = len(payload)
+
+    if length <= 125:
+        header = bytes([byte0, length])
+
+    elif length <= 65535:
+        header = bytes([byte0, 126]) + struct.pack(">H", length)
+
+    else:
+        header = bytes([byte0, 127]) + struct.pack(">Q", length)
+
+    return header + payload
 
 
     
