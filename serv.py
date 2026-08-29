@@ -19,6 +19,13 @@ from http_parser import (
 )
 
 addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
+def shutdown_server(sel, server_socket):
+    print("\nShutting down — closing all connections...")
+    for key in list(sel.get_map().values()):
+        if isinstance(key.data, dict):
+            key.fileobj.close()
+    server_socket.close()
+    sel.close()
 
 def ip_check(server_socket):
     new_Sock, addr = server_socket.accept()
