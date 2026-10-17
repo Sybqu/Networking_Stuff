@@ -57,6 +57,7 @@ if server_socket is None:
     print("Failed to bind server socket.")
     sys.exit(1)
     server_socket.close()
+# DISPATCH TABLE FOR HANDLING , CAN I USE? UHM OOPS HERE ITS PREFERED AFAIK
 
 routes_dict = {
     ("GET", b"/"): handle_index,
@@ -67,24 +68,26 @@ routes_dict = {
 sel = selectors.DefaultSelector()
 sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
 sel.register(server_socket, selectors.EVENT_READ, data="listener")
-
+# Register server socket at idx1 (optional)
 while True:
-    events = sel.select(timeout=None)
-    for key, _ in events:
-        if key.data == "listener":
+    events = sel.select(timeout=0.5)
+    # select till timeout occurs
+    for key, _ in events: #(events : fileobj , events , data)
+        if key.data == "listener": #(if im the server listening for sockets)
             new_sock_for_comms, addr = ip_check(key.fileobj)
-            new_sock_for_comms.setblocking(False)
+            new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
             sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
 
-        elif key.data == "stdin":
-            line = sys.stdin.readline()
-            for other_key in list(sel.get_map().values()):
-                if isinstance(other_key.data, dict):
+        elif key.data == "stdin": #(if the server wants to send data)
+            line = sys.stdin.readline() 
+            for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
+                if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
                     other_key.fileobj.sendall(line.encode())
 
         else:
             conn = key.data
             client_sock = key.fileobj
+            #assign client socket
 
             try:
                 chunk = client_sock.recv(1024)
@@ -97,8 +100,9 @@ while True:
                 continue
 
             conn["buffer"] += chunk
-
+             # keep on recovering data from the client till all data received 
             if conn.get("mode") == "ws":
+                # WS SUPPORT AFTER CONNECTION UPGRADE
                 # buffer may hold more than one frame back to back
                 while True:
                     result = ws_parse_frame(conn["buffer"])
@@ -121,6 +125,7 @@ while True:
 
             else:
                 req_dict = http_handler(conn["buffer"])
+                # handle request from user
 
                 if req_dict is not None:
                     conn["buffer"] = b""  # this request's bytes are fully consumed
@@ -130,6 +135,7 @@ while True:
                         response = build_response(status, headers, body)
                         client_sock.send(response)
                         conn["mode"] = "ws"
+                        #WS Upgradation
                     else:
                         method = req_dict["method"].decode()
                         path = req_dict["path"]
@@ -137,3 +143,4 @@ while True:
                         status, headers, body = handler_func(req_dict)
                         response = build_response(status, headers, body)
                         client_sock.send(response)
+                        # fulfil req and send response to user
