@@ -1,146 +1,177 @@
-import socket
-import sys
-import selectors
+fake_messages = ["Hello", "fake", "testing"]
+import base64
+import hashlib
+import struct
 
-HOST = 'localhost'
-PORT = 3490
 
-from http_parser import (
-    http_handler,
-    handle_index,
-    handle_get_messages,
-    handle_post_messages,
-    handle_404,
-    build_response,
-    is_ws,
-    ws_upgrade,
-    ws_parse_frame,
-    ws_build_frame,
-)
 
-addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
-def shutdown_server(sel, server_socket):
-    print("\nShutting down — closing all connections...")
-    for key in list(sel.get_map().values()):
-        if isinstance(key.data, dict):
-            key.fileobj.close()
-    server_socket.close()
-    sel.close()
+def http_handler(request: bytes) -> dict | None:
+    if b"\r\n\r\n" not in request:
+        return None
 
-def ip_check(server_socket):
-    new_Sock, addr = server_socket.accept()
-    if new_Sock.family == socket.AF_INET:
-        print(f"Accepted connection from IPv4 address: {addr[0]}")
-    elif new_Sock.family == socket.AF_INET6:
-        print(f"Accepted connection from IPv6 address: {addr[0]}")
-    return new_Sock, addr
+    req = request.split(b"\r\n")
+    meth, pth, ver = req[0].split()
+    print(f"{meth} , {pth} , {ver}")
 
-def set_up():
-    new_socket = None
-    for family, socktype, proto, canonname, sockaddr in addr_info:
-        try:
-            new_socket = socket.socket(family, socktype, proto)
-            new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            new_socket.bind(sockaddr)
-            new_socket.listen(5)
-            print(f"Listening on {sockaddr} (Family: {family.name})")
+    http_dict = {}
+    http_dict["method"] = meth.strip()
+    http_dict["path"] = pth.strip()
+    http_dict["version"] = ver.strip()
+    headers_dict = {}
+
+    # header parsing
+    for line in req[1:]:
+        if line == b"":
             break
-        except OSError:
-            if new_socket:
-                new_socket.close()
-            new_socket = None
-    return new_socket
+        header, value = line.split(b": ", maxsplit=1)
+        headers_dict[header.lower().strip()] = value.strip() # Header values are case sensitive
+    http_dict["headers"] = headers_dict
 
-server_socket = set_up()
+# WS HANDSHAKE
 
-if server_socket is None:
-    print("Failed to bind server socket.")
-    sys.exit(1)
-    server_socket.close()
-# DISPATCH TABLE FOR HANDLING , CAN I USE? UHM OOPS HERE ITS PREFERED AFAIK
+    # body parsing (POST)
+    if http_dict["method"] == b"POST":
+        if b"content-length" in http_dict["headers"]: #uniformity : convert everything in header to lower and then compare
+            body_len = int(http_dict["headers"][b"content-length"])
+            _, body_post = request.split(b"\r\n\r\n", 1) # Filler removal
 
-routes_dict = {
-    ("GET", b"/"): handle_index,
-    ("GET", b"/messages"): handle_get_messages,
-    ("POST", b"/messages"): handle_post_messages,
-}
+            if len(body_post) < body_len:
+                return None  # body hasn't fully arrived yet — wait for more recv()
 
-sel = selectors.DefaultSelector()
-sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
-sel.register(server_socket, selectors.EVENT_READ, data="listener")
-# Register server socket at idx1 (optional)
-while True:
-    events = sel.select(timeout=0.5)
-    # select till timeout occurs
-    for key, _ in events: #(events : fileobj , events , data)
-        if key.data == "listener": #(if im the server listening for sockets)
-            new_sock_for_comms, addr = ip_check(key.fileobj)
-            new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
-            sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
+            http_dict["body"] = body_post[:body_len]
 
-        elif key.data == "stdin": #(if the server wants to send data)
-            line = sys.stdin.readline() 
-            for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
-                if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
-                    other_key.fileobj.sendall(line.encode())
+    return http_dict
 
-        else:
-            conn = key.data
-            client_sock = key.fileobj
-            #assign client socket
 
-            try:
-                chunk = client_sock.recv(1024)
-            except (ConnectionResetError, BrokenPipeError, OSError):
-                chunk = b""
+def handle_index(req_dict : dict):
+    with open("index.html", "rb") as f:
+        body = f.read()
+    return 200, {"Content-Type": "text/html"}, body
 
-            if not chunk:
-                sel.unregister(client_sock)
-                client_sock.close()
-                continue
 
-            conn["buffer"] += chunk
-             # keep on recovering data from the client till all data received 
-            if conn.get("mode") == "ws":
-                # WS SUPPORT AFTER CONNECTION UPGRADE
-                # buffer may hold more than one frame back to back
-                while True:
-                    result = ws_parse_frame(conn["buffer"])
-                    if result is None:
-                        break  # not a full frame yet — wait for next recv()
+def handle_get_messages(req_dict : dict):
+    body = "\n".join(fake_messages).encode()
+    return 200, {"Content-Type": "text/plain"}, body
 
-                    opcode, payload, consumed = result
-                    conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
 
-                    if opcode == 0x8:  # close
-                        client_sock.sendall(ws_build_frame(0x8, b""))
-                        sel.unregister(client_sock)
-                        client_sock.close()
-                        break
-                    elif opcode == 0x9:  # ping
-                        client_sock.sendall(ws_build_frame(0xA, payload))
-                    elif opcode in (0x1, 0x2):  # text/binary
-                        print(f"ws payload from {client_sock}: {bytes(payload)!r}")
-                        client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+def handle_post_messages(req_dict : dict):  
+    fake_messages.append(req_dict["body"].decode())
+    return 201, {}, b"message received"
 
-            else:
-                req_dict = http_handler(conn["buffer"]) # The buffer contains the request , now we split into req_dict
-                # handle request from user
+def handle_404(req_dict : dict):
+    return 404, {"Content-Type": "text/plain"}, b"not found"
 
-                if req_dict is not None:
-                    conn["buffer"] = b""  # this request's bytes are fully consumed
+def build_response(status,headers,body):
+    status_phrases = {
+        200: "OK",
+        201: "Created",
+        404: "Not Found",
+        500: "Internal Server Error",
+        101: "Switching Protocols"
+    }
+    phrase = status_phrases.get(status,"unknown")
+    response_line = f"HTTP/1.1 {status} {phrase}\r\n"
+    headers = dict(headers)
+    headers["Content-Length"] = str(len(body))
+    response_line = f"HTTP/1.1 {status} {phrase}\r\n"
+    headers_line="".join(f"{k}: {v}\r\n" for k,v in headers.items())
+    return (response_line + headers_line + "\r\n").encode() + body
 
-                    if is_ws(req_dict):
-                        status, headers, body = ws_upgrade(req_dict)
-                        response = build_response(status, headers, body)
-                        client_sock.sendall(response)
-                        conn["mode"] = "ws"
-                        #WS Upgradation
-                    else:
-                        method = req_dict["method"].decode()
-                        path = req_dict["path"]
-                        handler_func = routes_dict.get((method,path), handle_404)
-                        status, headers, body = handler_func(req_dict)
-                        response = build_response(status, headers, body)
-                        client_sock.sendall(response)
-                        # fulfil req and send response to user
+def is_ws(req_dict : dict):
+    if req_dict["method"] == b"GET":
+        upg_val = req_dict["headers"].get(b"upgrade",b"") # Convert Upgrade to lowercase , header look up + uniformity 
+        if upg_val.lower() == b"websocket":
+            return True
+    return False  
+
+def ws_upgrade(req_dict: dict):
+    sec_ws_key = req_dict["headers"].get(b"sec-websocket-key", b"") # Same uniformity bug now fixed
+    GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    combined = sec_ws_key + GUID
+    sha1_hash = hashlib.sha1(combined).digest()
+    accept_str = base64.b64encode(sha1_hash).decode('utf-8')
+    body = b""
+    return 101, {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Accept": accept_str}, body
+
+
+def ws_parse_frame(data: bytes) -> tuple[int, bytearray] | None:
+    if len(data) < 2:
+        return None  # not even the first 2 bytes yet
+
+    byte0 = data[0]
+    byte1 = data[1]
+
+    FIN = (byte0 & 0b10000000) >> 7
+    opcode = (byte0 & 0b00001111)
+
+    MASK_bit = (byte1 & 0b10000000) >> 7
+    payload_len = (byte1 & 0b01111111)
+
+    if payload_len == 126:
+        if len(data) < 4:
+            return None  # extended length bytes haven't arrived yet
+        actual_len = struct.unpack(">H", data[2:4])[0]
+        mask_key = data[4:8]
+        payload_start = 8
+
+    elif payload_len == 127:
+        if len(data) < 10:
+            return None  # extended length bytes haven't arrived yet
+        actual_len = struct.unpack(">Q", data[2:10])[0]
+        mask_key = data[10:14]
+        payload_start = 14
+
+    else:
+        actual_len = payload_len
+        mask_key = data[2:6]
+        payload_start = 6
+
+    if len(data) < payload_start + actual_len:
+        return None  # full payload hasn't arrived yet — wait for more recv()
+
+    masked_payload = data[payload_start:payload_start + actual_len]
+
+    unmasked = bytearray(len(masked_payload))
+    for i in range(len(masked_payload)):
+        unmasked[i] = masked_payload[i] ^ mask_key[i % 4]
+
+    return (opcode, unmasked, payload_start + actual_len)
+
+def ws_build_frame(opcode: int, payload: bytes) -> bytes:
+    byte0 = (1 << 7) | opcode  # FIN=1, combined with opcode
+
+    length = len(payload)
+
+    if length <= 125:
+        header = bytes([byte0, length])
+
+    elif length <= 65535:
+        header = bytes([byte0, 126]) + struct.pack(">H", length)
+
+    else:
+        header = bytes([byte0, 127]) + struct.pack(">Q", length)
+
+    return header + payload
+
+
+    
+
+
+
+
+
+## OOPS approach?
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
