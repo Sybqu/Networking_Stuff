@@ -124,7 +124,7 @@ while True:
                         client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
 
             else:
-                req_dict = http_handler(conn["buffer"])
+                req_dict = http_handler(conn["buffer"]) # The buffer contains the request , now we split into req_dict
                 # handle request from user
 
                 if req_dict is not None:
@@ -139,7 +139,7 @@ while True:
                     else:
                         method = req_dict["method"].decode()
                         path = req_dict["path"]
-                        handler_func = routes_dict.get((method, path), handle_404)
+                        handler_func = routes_dict.get((method,path), handle_404)
                         status, headers, body = handler_func(req_dict)
                         response = build_response(status, headers, body)
                         client_sock.sendall(response)
