@@ -113,15 +113,15 @@ while True:
                     conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
 
                     if opcode == 0x8:  # close
-                        client_sock.send(ws_build_frame(0x8, b""))
+                        client_sock.sendall(ws_build_frame(0x8, b""))
                         sel.unregister(client_sock)
                         client_sock.close()
                         break
                     elif opcode == 0x9:  # ping
-                        client_sock.send(ws_build_frame(0xA, payload))
+                        client_sock.sendall(ws_build_frame(0xA, payload))
                     elif opcode in (0x1, 0x2):  # text/binary
                         print(f"ws payload from {client_sock}: {bytes(payload)!r}")
-                        client_sock.send(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+                        client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
 
             else:
                 req_dict = http_handler(conn["buffer"])
@@ -133,7 +133,7 @@ while True:
                     if is_ws(req_dict):
                         status, headers, body = ws_upgrade(req_dict)
                         response = build_response(status, headers, body)
-                        client_sock.send(response)
+                        client_sock.sendall(response)
                         conn["mode"] = "ws"
                         #WS Upgradation
                     else:
@@ -142,5 +142,5 @@ while True:
                         handler_func = routes_dict.get((method, path), handle_404)
                         status, headers, body = handler_func(req_dict)
                         response = build_response(status, headers, body)
-                        client_sock.send(response)
+                        client_sock.sendall(response)
                         # fulfil req and send response to user
