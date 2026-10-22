@@ -76,6 +76,16 @@ def close_client(sel, client_sock):
     except Exception:
         pass
 
+def ws_broadcast(sel, frame):
+    # Broadcast WebSocket frame to all connected clients in WebSocket mode
+    for key in list(sel.get_map().values()):
+        if isinstance(key.data, dict) and key.data.get("mode") == "ws":
+            peer_sock = key.fileobj
+            try:
+                peer_sock.sendall(frame)
+            except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                close_client(sel, peer_sock)
+
 def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
     server_socket = set_up(host, port)
     if server_socket is None:
@@ -153,11 +163,8 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                                     break
                             elif opcode in (0x1, 0x2):  # text/binary
                                 print(f"ws payload from {client_sock}: {bytes(payload)!r}")
-                                try:
-                                    client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    close_client(sel, client_sock)
-                                    break
+                                frame = ws_build_frame(opcode, bytes(payload))
+                                ws_broadcast(sel, frame)
 
                     else:
                         while True:

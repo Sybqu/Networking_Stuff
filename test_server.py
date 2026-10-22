@@ -241,6 +241,49 @@ class TestRawSocketServer(unittest.TestCase):
             data2 = self.read_all(s2, timeout=1.0)
             self.assertIn(b"HTTP/1.1 200 OK", data2)
 
+    # 13. WebSocket broadcast: frame sent from Client 1 is received by Client 2
+    def test_13_websocket_broadcast(self):
+        s1 = self.connect_client()
+        s2 = self.connect_client()
+        try:
+            # Upgrade Client 1
+            s1.sendall(
+                b"GET / HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"\r\n"
+            )
+            resp1 = self.read_all(s1, timeout=0.5)
+            self.assertIn(b"101 Switching Protocols", resp1)
+
+            # Upgrade Client 2
+            s2.sendall(
+                b"GET / HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"\r\n"
+            )
+            resp2 = self.read_all(s2, timeout=0.5)
+            self.assertIn(b"101 Switching Protocols", resp2)
+
+            # Client 1 sends masked text frame: "hello everyone"
+            payload = b"hello everyone"
+            mask_key = b"1234"
+            masked_payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+            client_frame = bytes([0x81, 0x80 | len(payload)]) + mask_key + masked_payload
+            s1.sendall(client_frame)
+
+            # Client 2 should receive the broadcasted server frame
+            data = s2.recv(4096)
+            self.assertIn(b"hello everyone", data)
+        finally:
+            s1.close()
+            s2.close()
+
 
 if __name__ == "__main__":
     unittest.main()
