@@ -31,7 +31,7 @@ Two from-scratch networking builds, no frameworks, working through raw sockets i
 
 ```
 Layer 1 — sockets/selectors (accept, poll loop)          DONE
-Layer 2 — HTTP parsing (http_parser.py)                  DONE
+Layer 2 — HTTP parsing (http_parser.py)                  DONE (RFC 9112 strict framing + guardrails)
 Layer 3 — REST routing (routes_dict, handlers, builder)  DONE
 Layer 4 — WS handshake (Upgrade detection, 101 response) DONE, verified against RFC 6455 known-good value
 Layer 5 — WS frame parser/builder (opcodes, masking)     DONE
@@ -43,36 +43,61 @@ Persistence                                              NOT STARTED (in-memory 
 
 ### Files
 
-- **`serv.py`** — owns all networking: dual-stack (IPv4/IPv6) socket setup via `getaddrinfo`, the `selectors`-based event loop, accepting connections, per-connection buffering, dispatching to either HTTP or WS handling based on a per-connection `mode` flag.
-- **`http_parser.py`** — pure logic, no sockets. HTTP request parsing, response building, route handlers, the WS handshake math (SHA-1 + base64 of the `Sec-WebSocket-Key`), and the WS frame parser/builder.
+- **`serv.py`** — owns all networking: dual-stack (IPv4/IPv6) socket setup via `getaddrinfo`, the `selectors`-based event loop, accepting connections, per-connection buffering, dispatching to either HTTP or WS handling based on a per-connection `mode` flag, crash isolation, and connection teardown.
+- **`http_parser.py`** — pure logic, strictly no sockets. HTTP request parsing, RFC 9112 validation, response building with extended reason phrases, route handlers, the WS handshake math (SHA-1 + base64 of the `Sec-WebSocket-Key`), and the WS frame parser/builder.
+- **`test_server.py`** — 12 end-to-end integration tests speaking raw wire TCP bytes against a running server.
 
-### What's built and working
+### What's Built and Working (Fixed Guardrails)
 
-- **HTTP parsing**: Request-Line, headers, `Content-Length`-based body reading, completeness checks (returns `None` until a full request has arrived).
-- **Response building**: Status-Line, headers, always-computed `Content-Length` — never hardcoded.
-- **REST routing**: `(method, path)` → handler dict, GET/POST on `/` and `/messages`, 404 fallback.
-- **WS handshake**: Detects `Upgrade: websocket`, computes `Sec-WebSocket-Accept` — verified byte-for-byte against the RFC 6455 example value.
-- **WS framing**: Parses all three length encodings (6/8/14-byte headers), unmasks client payloads; builds unmasked server-to-client frames of any size. Handles close (`0x8`), ping (`0x9`)/pong (`0xA`), and currently echoes text/binary frames back to the sender.
-
-### Immediate next steps
-
-1. Verify the echo live against the JS test page.
-2. Replace echo with real broadcast (reusing the `selectors.get_map()` relay pattern already proven in a standalone scratch demo).
-3. Test with two browser tabs simultaneously.
-4. Build out the test page into an actual chat UI.
-5. Add TLS via Python's `ssl` module (wraps the existing socket — no change to parsing/routing logic underneath).
-6. Media sharing via binary (`0x2`) WS frames, reusing the existing frame parser/builder unchanged.
-
-### Deliberately not doing (for now)
-
-- **No database** — an in-memory Python list (`fake_messages`) is the deliberate choice while proving the request/routing/broadcast pipeline. A local JSON file is the natural next step for persistence if needed later; a hosted DB (Supabase, etc.) is considered out of scope for a project about understanding every layer by hand.
-- **No WSGI/ASGI framework compliance** — building the server itself, not a framework-compatible target.
+- **Crash Isolation & Network Guards**:
+  - `HttpError` exception carrying HTTP status codes for any protocol violations; `serv.py` returns the exact status response and closes only that socket.
+  - Handler exception sandbox: catches `Exception` (never `BaseException`), logs the full traceback with `traceback.print_exc()`, answers `500 Internal Server Error`, and keeps the server alive for subsequent clients.
+  - Send-error isolation: `BrokenPipeError`, `ConnectionResetError`, `BlockingIOError`, and `OSError` are trapped per connection and never crash the main event loop.
+- **Strict RFC 9112 HTTP Parsing**:
+  - **Header-Driven Body Framing**: Body consumption is driven by `Content-Length`, allowing `PUT`, `DELETE`, and `POST` to isolate payload bytes without stream corruption.
+  - **Pipelining Drain Loop**: The server loop uses a `while True` drain to process multiple requests packed into a single `recv()` buffer without stalling.
+  - **Whitespace Guard**: Rejects field-lines with whitespace between field-name and colon with `400 Bad Request` (RFC 9112 §5.1 request smuggling guard).
+  - **Duplicate Header Guard**: Rejects duplicate `Content-Length` headers with `400 Bad Request` (RFC 9112 §6.3.5).
+  - **Digit-Only Validation**: `Content-Length` is validated for ASCII digits only (rejecting signs like `+5`, negative `-5`, underscores `1_0`, or alpha strings `abc`).
+  - **Transfer-Encoding Rejection**: Explicitly rejects `Transfer-Encoding` with `501 Not Implemented`.
+  - **Empty Body Default**: Requests with no `Content-Length` default to an empty body `b""` (RFC 9112 §6.3), preventing `KeyError` crashes in handlers.
+  - **Extended Reason Phrases**: Includes 400, 404, 405, 411, 413, 431, 500, 501, 101, 200, 201.
+- **WebSocket Handshake & Framing**:
+  - Detects `Upgrade: websocket`, computes `Sec-WebSocket-Accept` — verified byte-for-byte against the RFC 6455 example value.
+  - Parses all three length encodings (6/8/14-byte headers), unmasks client payloads; builds unmasked server-to-client frames of any size. Handles close (`0x8`), ping (`0x9`)/pong (`0xA`), and echoes text/binary frames.
 
 ---
 
-## Shared concepts across both projects
+### What Is Deliberately Out of Scope / Not Fixed Yet
 
-- Raw socket lifecycle: `socket()` → `bind()` → `listen()` → `accept()` → `recv()`/`send()`.
-- Multiplexing one thread across many connections (`poll()` in C, `selectors` in Python) instead of blocking or threading.
-- Partial reads/writes are normal — TCP doesn't guarantee message boundaries, so both projects needed explicit buffering and "do I have a complete message yet?" checks.
-- Protocol framing, solved twice independently: `\r\n\r\n` + `Content-Length` for HTTP, explicit length-prefixed binary frames for WebSocket — same underlying problem, different-layer solutions.
+- **OOP Refactoring**: Kept as pure functions and procedural dictionary data structures (`http_dict`, `conn["buffer"]`). Refactoring into `Request`, `Response`, and `Router` classes is scheduled for the next phase.
+- **Non-blocking Write Queueing**: `client_sock.sendall()` can still block if kernel socket buffers are completely full under heavy throughput. A production event loop registers `EVENT_WRITE` to drain outbound response buffers asynchronously.
+- **Chunked Transfer-Encoding**: The server currently rejects chunked transfer with 501 rather than de-chunking it.
+- **Unbounded Header Protection**: No max buffer length (e.g. 8KB limit) is enforced while searching for `\r\n\r\n`. A client sending infinite bytes without `\r\n\r\n` would grow memory until exhausted (`431 Request Header Fields Too Large`).
+- **WebSocket Broadcast**: Server still echoes back to the sender rather than broadcasting across `sel.get_map()` to all active WS connections.
+- **Server Stdin Broadcast**: Commented out / shelved for future admin tooling.
+- **Database / Persistence**: Kept as an in-memory list (`fake_messages`).
+
+---
+
+### Running the Test Suite
+
+Run the 12 raw-socket integration tests from the project directory:
+
+```bash
+python -m unittest test_server.py
+```
+
+Tests cover:
+1. Two pipelined requests in one send -> two distinct responses.
+2. Slow drip: request sent one byte at a time -> one correct response.
+3. Header line with no colon -> 400 response, server remains alive for new connections.
+4. `"Host : x"` (space before colon) -> 400 response.
+5. Duplicate `Content-Length` headers -> 400 response.
+6. Malformed `Content-Length` (`-5`, `abc`, `1_0`, `+5`) -> 400 response.
+7. `Transfer-Encoding` present -> 501 response.
+8. `PUT`/`DELETE` with `Content-Length` followed by pipelined `GET` -> both handled, body isolated.
+9. `POST` with no `Content-Length` -> empty body handled cleanly without crashing.
+10. Handler raising an unhandled exception -> 500 response, server remains alive.
+11. Missing template file (`index.html`) -> 500 response, server remains alive.
+12. Abrupt client disconnect mid-response -> send error trapped, server remains alive.
