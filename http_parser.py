@@ -14,7 +14,9 @@ def http_handler(request: bytes) -> dict | None:
         return None
 
     req = request.split(b"\r\n")
-    req_len = len(request[:request.find(b"\r\n\r\n")+4]) #find returns index +4 to include newlines
+    header_end_idx = request.find(b"\r\n\r\n") + 4
+    req_len = header_end_idx
+
     if not req[0].strip():
         raise HttpError(400, "Empty request line")
     parts = req[0].split()
@@ -27,6 +29,7 @@ def http_handler(request: bytes) -> dict | None:
     http_dict["method"] = meth.strip()
     http_dict["path"] = pth.strip()
     http_dict["version"] = ver.strip()
+    http_dict["body"] = b""  # default empty body (RFC 9112 s6.3)
     headers_dict = {}
 
 # TCP is a continuous byte stream , improving partial requests / piplining
@@ -38,22 +41,37 @@ def http_handler(request: bytes) -> dict | None:
             raise HttpError(400, "Header line missing colon")
         header, value = line.split(b":", maxsplit=1) # b": ".split() is bad what if the request contains ":" itself
 
-        headers_dict[header.lower().strip()] = value.strip() # Header values are case sensitive
+        # RFC 9112 s5.1: No whitespace is allowed between the field name and colon
+        if header.endswith(b" ") or header.endswith(b"\t"):
+            raise HttpError(400, "Whitespace before colon in header field name")
+
+        norm_key = header.lower().strip()
+        # RFC 9112 s6.3: Reject duplicate Content-Length headers
+        if norm_key == b"content-length" and norm_key in headers_dict:
+            raise HttpError(400, "Duplicate Content-Length header")
+
+        headers_dict[norm_key] = value.strip() # Header values are case sensitive
     http_dict["headers"] = headers_dict
 
+    # RFC 9112: Reject Transfer-Encoding with 501 Not Implemented
+    if b"transfer-encoding" in headers_dict:
+        raise HttpError(501, "Transfer-Encoding not implemented")
 
-    # body parsing (POST)
-    if http_dict["method"] == b"POST":
-        if b"content-length" in http_dict["headers"]: #uniformity : convert everything in header to lower and then compare
-            body_len = int(http_dict["headers"][b"content-length"])
-            _,c_, body_post = request.partition(b"\r\n\r\n") # header removal #partition
+    # Body framing driven by headers, not method
+    if b"content-length" in headers_dict:
+        cl_val = headers_dict[b"content-length"]
+        # Content-Length must be ASCII digits only (reject -5, abc, 1_0, +5)
+        if not cl_val or not cl_val.isdigit():
+            raise HttpError(400, "Content-Length must contain only ASCII digits")
 
+        body_len = int(cl_val)
+        body_post = request[header_end_idx:]
 
-            if len(body_post) < body_len:
-                return None  # body hasn't fully arrived yet — wait for more recv()
-            req_len += body_len
+        if len(body_post) < body_len:
+            return None  # body hasn't fully arrived yet — wait for more recv()
+        req_len += body_len
 
-            http_dict["body"] = body_post[:body_len]
+        http_dict["body"] = body_post[:body_len]
 
     http_dict["length"] = req_len        
 
