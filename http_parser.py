@@ -10,6 +10,7 @@ def http_handler(request: bytes) -> dict | None:
         return None
 
     req = request.split(b"\r\n")
+    req_len = len(request[:request.find(b"\r\n\r\n")+4]) #find returns index +4 to include newlines
     meth, pth, ver = req[0].split()
     print(f"{meth} , {pth} , {ver}")
 
@@ -19,26 +20,31 @@ def http_handler(request: bytes) -> dict | None:
     http_dict["version"] = ver.strip()
     headers_dict = {}
 
+# TCP is a continuous byte stream , improving partial requests / piplining
     # header parsing
     for line in req[1:]:
         if line == b"":
             break
-        header, value = line.split(b": ", maxsplit=1)
+        header, value = line.split(b":", maxsplit=1) # b": ".split() is bad what if the request contains ":" itself
+
         headers_dict[header.lower().strip()] = value.strip() # Header values are case sensitive
     http_dict["headers"] = headers_dict
 
-# WS HANDSHAKE
 
     # body parsing (POST)
     if http_dict["method"] == b"POST":
         if b"content-length" in http_dict["headers"]: #uniformity : convert everything in header to lower and then compare
             body_len = int(http_dict["headers"][b"content-length"])
-            _, body_post = request.split(b"\r\n\r\n", 1) # Filler removal
+            _,c_, body_post = request.partition(b"\r\n\r\n") # header removal #partition
+
 
             if len(body_post) < body_len:
                 return None  # body hasn't fully arrived yet — wait for more recv()
+            req_len += body_len
 
             http_dict["body"] = body_post[:body_len]
+
+    http_dict["length"] = req_len        
 
     return http_dict
 

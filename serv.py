@@ -66,7 +66,7 @@ routes_dict = {
 }
 
 sel = selectors.DefaultSelector()
-sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
+# sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
 sel.register(server_socket, selectors.EVENT_READ, data="listener")
 # Register server socket at idx1 (optional)
 while True:
@@ -77,12 +77,12 @@ while True:
             new_sock_for_comms, addr = ip_check(key.fileobj)
             new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
             sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
-
-        elif key.data == "stdin": #(if the server wants to send data)
-            line = sys.stdin.readline() 
-            for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
-                if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
-                    other_key.fileobj.sendall(line.encode())
+        # Shelved for future improvement admin perms :>
+        # elif key.data == "stdin": #(if the server wants to send data)
+         #   line = sys.stdin.readline() 
+         #   for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
+          #      if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
+           #         other_key.fileobj.sendall(line.encode())
 
         else:
             conn = key.data
@@ -124,22 +124,23 @@ while True:
                         client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
 
             else:
-                req_dict = http_handler(conn["buffer"]) # The buffer contains the request , now we split into req_dict
-                # handle request from user
+                while True:
+                    req_dict = http_handler(conn["buffer"])  # Drain all complete requests from buffer
+                    if req_dict is None:
+                        break  # Incomplete request or buffer empty — wait for next recv()
 
-                if req_dict is not None:
-                    conn["buffer"] = b""  # this request's bytes are fully consumed
+                    conn["buffer"] = conn["buffer"][req_dict["length"]:]
 
                     if is_ws(req_dict):
                         status, headers, body = ws_upgrade(req_dict)
                         response = build_response(status, headers, body)
                         client_sock.sendall(response)
                         conn["mode"] = "ws"
-                        #WS Upgradation
+                        break  # Upgraded to WebSocket, exit HTTP drain loop
                     else:
                         method = req_dict["method"].decode()
                         path = req_dict["path"]
-                        handler_func = routes_dict.get((method,path), handle_404)
+                        handler_func = routes_dict.get((method, path), handle_404)
                         status, headers, body = handler_func(req_dict)
                         response = build_response(status, headers, body)
                         client_sock.sendall(response)
