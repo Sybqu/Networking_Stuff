@@ -1,11 +1,13 @@
 import socket
 import sys
 import selectors
+import traceback
 
 HOST = 'localhost'
 PORT = 3490
 
 from http_parser import (
+    HttpError,
     http_handler,
     handle_index,
     handle_get_messages,
@@ -64,6 +66,16 @@ routes_dict = {
     ("POST", b"/messages"): handle_post_messages,
 }
 
+def close_client(sel, client_sock):
+    try:
+        sel.unregister(client_sock)
+    except Exception:
+        pass
+    try:
+        client_sock.close()
+    except Exception:
+        pass
+
 def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
     server_socket = set_up(host, port)
     if server_socket is None:
@@ -110,8 +122,7 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                         chunk = b""
 
                     if not chunk:
-                        sel.unregister(client_sock)
-                        client_sock.close()
+                        close_client(sel, client_sock)
                         continue
 
                     conn["buffer"] += chunk
@@ -128,19 +139,39 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                             conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
 
                             if opcode == 0x8:  # close
-                                client_sock.sendall(ws_build_frame(0x8, b""))
-                                sel.unregister(client_sock)
-                                client_sock.close()
+                                try:
+                                    client_sock.sendall(ws_build_frame(0x8, b""))
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    pass
+                                close_client(sel, client_sock)
                                 break
                             elif opcode == 0x9:  # ping
-                                client_sock.sendall(ws_build_frame(0xA, payload))
+                                try:
+                                    client_sock.sendall(ws_build_frame(0xA, payload))
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    close_client(sel, client_sock)
+                                    break
                             elif opcode in (0x1, 0x2):  # text/binary
                                 print(f"ws payload from {client_sock}: {bytes(payload)!r}")
-                                client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+                                try:
+                                    client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    close_client(sel, client_sock)
+                                    break
 
                     else:
                         while True:
-                            req_dict = http_handler(conn["buffer"])  # Drain all complete requests from buffer
+                            try:
+                                req_dict = http_handler(conn["buffer"])  # Drain all complete requests from buffer
+                            except HttpError as err:
+                                try:
+                                    err_resp = build_response(err.status_code, {"Content-Type": "text/plain", "Connection": "close"}, err.message.encode() if err.message else b"Bad Request")
+                                    client_sock.sendall(err_resp)
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    pass
+                                close_client(sel, client_sock)
+                                break
+
                             if req_dict is None:
                                 break  # Incomplete request or buffer empty — wait for next recv()
 
@@ -149,16 +180,35 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                             if is_ws(req_dict):
                                 status, headers, body = ws_upgrade(req_dict)
                                 response = build_response(status, headers, body)
-                                client_sock.sendall(response)
+                                try:
+                                    client_sock.sendall(response)
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    close_client(sel, client_sock)
+                                    break
                                 conn["mode"] = "ws"
                                 break  # Upgraded to WebSocket, exit HTTP drain loop
                             else:
-                                method = req_dict["method"].decode()
+                                method = req_dict["method"].decode(errors="replace")
                                 path = req_dict["path"]
                                 handler_func = routes_dict.get((method, path), handle_404)
-                                status, headers, body = handler_func(req_dict)
-                                response = build_response(status, headers, body)
-                                client_sock.sendall(response)
+                                try:
+                                    status, headers, body = handler_func(req_dict)
+                                    response = build_response(status, headers, body)
+                                except Exception:
+                                    traceback.print_exc()
+                                    try:
+                                        err_resp = build_response(500, {"Content-Type": "text/plain", "Connection": "close"}, b"Internal Server Error")
+                                        client_sock.sendall(err_resp)
+                                    except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                        pass
+                                    close_client(sel, client_sock)
+                                    break
+
+                                try:
+                                    client_sock.sendall(response)
+                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                    close_client(sel, client_sock)
+                                    break
                                 # fulfil req and send response to user
     finally:
         shutdown_server(sel, server_socket)

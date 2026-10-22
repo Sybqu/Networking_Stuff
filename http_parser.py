@@ -3,14 +3,24 @@ import base64
 import hashlib
 import struct
 
-
+class HttpError(Exception):
+    def __init__(self, status_code: int, message: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
 
 def http_handler(request: bytes) -> dict | None:
     if b"\r\n\r\n" not in request:
         return None
 
     req = request.split(b"\r\n")
-    meth, pth, ver = req[0].split()
+    req_len = len(request[:request.find(b"\r\n\r\n")+4]) #find returns index +4 to include newlines
+    if not req[0].strip():
+        raise HttpError(400, "Empty request line")
+    parts = req[0].split()
+    if len(parts) != 3:
+        raise HttpError(400, "Malformed request line")
+    meth, pth, ver = parts
     print(f"{meth} , {pth} , {ver}")
 
     http_dict = {}
@@ -19,27 +29,33 @@ def http_handler(request: bytes) -> dict | None:
     http_dict["version"] = ver.strip()
     headers_dict = {}
 
+# TCP is a continuous byte stream , improving partial requests / piplining
     # header parsing
     for line in req[1:]:
         if line == b"":
             break
-        header, value = line.split(b": ", maxsplit=1)
-        headers_dict[header.strip()] = value.strip()
+        if b":" not in line:
+            raise HttpError(400, "Header line missing colon")
+        header, value = line.split(b":", maxsplit=1) # b": ".split() is bad what if the request contains ":" itself
 
+        headers_dict[header.lower().strip()] = value.strip() # Header values are case sensitive
     http_dict["headers"] = headers_dict
 
-# WS HANDSHAKE
 
     # body parsing (POST)
     if http_dict["method"] == b"POST":
-        if b"Content-Length" in http_dict["headers"]:
-            body_len = int(http_dict["headers"][b"Content-Length"])
-            _, body_post = request.split(b"\r\n\r\n", 1)
+        if b"content-length" in http_dict["headers"]: #uniformity : convert everything in header to lower and then compare
+            body_len = int(http_dict["headers"][b"content-length"])
+            _,c_, body_post = request.partition(b"\r\n\r\n") # header removal #partition
+
 
             if len(body_post) < body_len:
                 return None  # body hasn't fully arrived yet — wait for more recv()
+            req_len += body_len
 
             http_dict["body"] = body_post[:body_len]
+
+    http_dict["length"] = req_len        
 
     return http_dict
 
@@ -55,8 +71,8 @@ def handle_get_messages(req_dict : dict):
     return 200, {"Content-Type": "text/plain"}, body
 
 
-def handle_post_messages(req_dict : dict):
-    fake_messages.append(req["body"].decode())
+def handle_post_messages(req_dict : dict):  
+    fake_messages.append(req_dict["body"].decode())
     return 201, {}, b"message received"
 
 def handle_404(req_dict : dict):
@@ -66,27 +82,32 @@ def build_response(status,headers,body):
     status_phrases = {
         200: "OK",
         201: "Created",
+        400: "Bad Request",
         404: "Not Found",
+        405: "Method Not Allowed",
+        411: "Length Required",
+        413: "Payload Too Large",
+        431: "Request Header Fields Too Large",
         500: "Internal Server Error",
-        101: "Switching Protocols"
+        501: "Not Implemented",
+        101: "Switching Protocols",
     }
     phrase = status_phrases.get(status,"unknown")
-    response_line = f"HTTP/1.1 {status},{phrase}\r\n"
+    response_line = f"HTTP/1.1 {status} {phrase}\r\n"
     headers = dict(headers)
     headers["Content-Length"] = str(len(body))
-    response_line = f"HTTP/1.1 {status} {phrase}\r\n"
     headers_line="".join(f"{k}: {v}\r\n" for k,v in headers.items())
     return (response_line + headers_line + "\r\n").encode() + body
 
 def is_ws(req_dict : dict):
     if req_dict["method"] == b"GET":
-        upg_val = req_dict["headers"].get(b"Upgrade",b"")
+        upg_val = req_dict["headers"].get(b"upgrade",b"") # Convert Upgrade to lowercase , header look up + uniformity 
         if upg_val.lower() == b"websocket":
             return True
     return False  
 
 def ws_upgrade(req_dict: dict):
-    sec_ws_key = req_dict["headers"].get(b"Sec-WebSocket-Key", b"")
+    sec_ws_key = req_dict["headers"].get(b"sec-websocket-key", b"") # Same uniformity bug now fixed
     GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     combined = sec_ws_key + GUID
     sha1_hash = hashlib.sha1(combined).digest()
@@ -155,7 +176,6 @@ def ws_build_frame(opcode: int, payload: bytes) -> bytes:
     return header + payload
 
 
-    
 
 
 
@@ -173,6 +193,5 @@ def ws_build_frame(opcode: int, payload: bytes) -> bytes:
 
 
 
-    
 
 
