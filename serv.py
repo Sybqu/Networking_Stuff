@@ -18,14 +18,19 @@ from http_parser import (
     ws_build_frame,
 )
 
-addr_info = socket.getaddrinfo(HOST, PORT, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
 def shutdown_server(sel, server_socket):
     print("\nShutting down — closing all connections...")
     for key in list(sel.get_map().values()):
         if isinstance(key.data, dict):
             key.fileobj.close()
-    server_socket.close()
-    sel.close()
+    try:
+        server_socket.close()
+    except Exception:
+        pass
+    try:
+        sel.close()
+    except Exception:
+        pass
 
 def ip_check(server_socket):
     new_Sock, addr = server_socket.accept()
@@ -35,8 +40,9 @@ def ip_check(server_socket):
         print(f"Accepted connection from IPv6 address: {addr[0]}")
     return new_Sock, addr
 
-def set_up():
+def set_up(host=HOST, port=PORT):
     new_socket = None
+    addr_info = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
     for family, socktype, proto, canonname, sockaddr in addr_info:
         try:
             new_socket = socket.socket(family, socktype, proto)
@@ -51,96 +57,114 @@ def set_up():
             new_socket = None
     return new_socket
 
-server_socket = set_up()
-
-if server_socket is None:
-    print("Failed to bind server socket.")
-    sys.exit(1)
-    server_socket.close()
 # DISPATCH TABLE FOR HANDLING , CAN I USE? UHM OOPS HERE ITS PREFERED AFAIK
-
 routes_dict = {
     ("GET", b"/"): handle_index,
     ("GET", b"/messages"): handle_get_messages,
     ("POST", b"/messages"): handle_post_messages,
 }
 
-sel = selectors.DefaultSelector()
-sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
-sel.register(server_socket, selectors.EVENT_READ, data="listener")
-# Register server socket at idx1 (optional)
-while True:
-    events = sel.select(timeout=0.5)
-    # select till timeout occurs
-    for key, _ in events: #(events : fileobj , events , data)
-        if key.data == "listener": #(if im the server listening for sockets)
-            new_sock_for_comms, addr = ip_check(key.fileobj)
-            new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
-            sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
+def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
+    server_socket = set_up(host, port)
+    if server_socket is None:
+        print("Failed to bind server socket.")
+        if ready_event:
+            ready_event.set()
+        return
 
-        elif key.data == "stdin": #(if the server wants to send data)
-            line = sys.stdin.readline() 
-            for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
-                if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
-                    other_key.fileobj.sendall(line.encode())
+    actual_port = server_socket.getsockname()[1]
+    sel = selectors.DefaultSelector()
+    # sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
+    sel.register(server_socket, selectors.EVENT_READ, data="listener")
+    # Register server socket at idx1 (optional)
 
-        else:
-            conn = key.data
-            client_sock = key.fileobj
-            #assign client socket
+    if ready_event:
+        ready_event.port = actual_port
+        ready_event.server_socket = server_socket
+        ready_event.set()
 
-            try:
-                chunk = client_sock.recv(1024)
-            except (ConnectionResetError, BrokenPipeError, OSError):
-                chunk = b""
+    try:
+        while stop_event is None or not stop_event.is_set():
+            events = sel.select(timeout=0.1)
+            # select till timeout occurs
+            for key, _ in events: #(events : fileobj , events , data)
+                if key.data == "listener": #(if im the server listening for sockets)
+                    new_sock_for_comms, addr = ip_check(key.fileobj)
+                    new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
+                    sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
+                # Shelved for future improvement admin perms :>
+                # elif key.data == "stdin": #(if the server wants to send data)
+                #   line = sys.stdin.readline() 
+                #   for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
+                #      if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
+                #         other_key.fileobj.sendall(line.encode())
 
-            if not chunk:
-                sel.unregister(client_sock)
-                client_sock.close()
-                continue
+                else:
+                    conn = key.data
+                    client_sock = key.fileobj
+                    #assign client socket
 
-            conn["buffer"] += chunk
-             # keep on recovering data from the client till all data received 
-            if conn.get("mode") == "ws":
-                # WS SUPPORT AFTER CONNECTION UPGRADE
-                # buffer may hold more than one frame back to back
-                while True:
-                    result = ws_parse_frame(conn["buffer"])
-                    if result is None:
-                        break  # not a full frame yet — wait for next recv()
+                    try:
+                        chunk = client_sock.recv(1024)
+                    except (ConnectionResetError, BrokenPipeError, OSError):
+                        chunk = b""
 
-                    opcode, payload, consumed = result
-                    conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
-
-                    if opcode == 0x8:  # close
-                        client_sock.send(ws_build_frame(0x8, b""))
+                    if not chunk:
                         sel.unregister(client_sock)
                         client_sock.close()
-                        break
-                    elif opcode == 0x9:  # ping
-                        client_sock.send(ws_build_frame(0xA, payload))
-                    elif opcode in (0x1, 0x2):  # text/binary
-                        print(f"ws payload from {client_sock}: {bytes(payload)!r}")
-                        client_sock.send(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+                        continue
 
-            else:
-                req_dict = http_handler(conn["buffer"])
-                # handle request from user
+                    conn["buffer"] += chunk
+                     # keep on recovering data from the client till all data received 
+                    if conn.get("mode") == "ws":
+                        # WS SUPPORT AFTER CONNECTION UPGRADE
+                        # buffer may hold more than one frame back to back
+                        while True:
+                            result = ws_parse_frame(conn["buffer"])
+                            if result is None:
+                                break  # not a full frame yet — wait for next recv()
 
-                if req_dict is not None:
-                    conn["buffer"] = b""  # this request's bytes are fully consumed
+                            opcode, payload, consumed = result
+                            conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
 
-                    if is_ws(req_dict):
-                        status, headers, body = ws_upgrade(req_dict)
-                        response = build_response(status, headers, body)
-                        client_sock.send(response)
-                        conn["mode"] = "ws"
-                        #WS Upgradation
+                            if opcode == 0x8:  # close
+                                client_sock.sendall(ws_build_frame(0x8, b""))
+                                sel.unregister(client_sock)
+                                client_sock.close()
+                                break
+                            elif opcode == 0x9:  # ping
+                                client_sock.sendall(ws_build_frame(0xA, payload))
+                            elif opcode in (0x1, 0x2):  # text/binary
+                                print(f"ws payload from {client_sock}: {bytes(payload)!r}")
+                                client_sock.sendall(ws_build_frame(opcode, bytes(payload)))  # echo back for now
+
                     else:
-                        method = req_dict["method"].decode()
-                        path = req_dict["path"]
-                        handler_func = routes_dict.get((method, path), handle_404)
-                        status, headers, body = handler_func(req_dict)
-                        response = build_response(status, headers, body)
-                        client_sock.send(response)
-                        # fulfil req and send response to user
+                        while True:
+                            req_dict = http_handler(conn["buffer"])  # Drain all complete requests from buffer
+                            if req_dict is None:
+                                break  # Incomplete request or buffer empty — wait for next recv()
+
+                            conn["buffer"] = conn["buffer"][req_dict["length"]:]
+
+                            if is_ws(req_dict):
+                                status, headers, body = ws_upgrade(req_dict)
+                                response = build_response(status, headers, body)
+                                client_sock.sendall(response)
+                                conn["mode"] = "ws"
+                                break  # Upgraded to WebSocket, exit HTTP drain loop
+                            else:
+                                method = req_dict["method"].decode()
+                                path = req_dict["path"]
+                                handler_func = routes_dict.get((method, path), handle_404)
+                                status, headers, body = handler_func(req_dict)
+                                response = build_response(status, headers, body)
+                                client_sock.sendall(response)
+                                # fulfil req and send response to user
+    finally:
+        shutdown_server(sel, server_socket)
+
+def main():
+    run_server(HOST, PORT)
+
+if __name__ == "__main__":
+    main()
