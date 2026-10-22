@@ -35,7 +35,7 @@ Layer 2 — HTTP parsing (http_parser.py)                  DONE (RFC 9112 strict
 Layer 3 — REST routing (routes_dict, handlers, builder)  DONE
 Layer 4 — WS handshake (Upgrade detection, 101 response) DONE, verified against RFC 6455 known-good value
 Layer 5 — WS frame parser/builder (opcodes, masking)     DONE
-Layer 6 — Live broadcast over WS                         NEXT (currently echoes, not broadcasts)
+Layer 6 — Live broadcast over WS                         DONE (multi-client broadcast with error isolation)
 TLS (HTTPS/WSS)                                          NOT STARTED
 Media sharing (binary WS frames)                         NOT STARTED
 Persistence                                              NOT STARTED (in-memory list only, deliberately)
