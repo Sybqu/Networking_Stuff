@@ -20,6 +20,26 @@ from http_parser import (
     ws_build_frame,
 )
 
+class Connection:
+    def __init__(self,sock:socket.socket):
+        self.sock = sock
+        self.buffer =b""
+        self.mode="http"
+        # Connection Type : skippign its keep-alive for now
+    def append(self,chunk:bytes)->None:
+        self.buffer += chunk
+
+    def consume(self,count:int)->None: # Count can be passed req_dict["length"]
+        self.buffer = self.buffer[count:] 
+
+    def Upgrade_Ws(self):
+        self.mode = "ws"
+            
+
+
+
+
+
 def shutdown_server(sel, server_socket):
     print("\nShutting down — closing all connections...")
     for key in list(sel.get_map().values()):
