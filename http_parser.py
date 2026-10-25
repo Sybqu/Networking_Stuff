@@ -86,7 +86,7 @@ def handle_index(req_dict : dict):
 
 def handle_get_messages(req_dict : dict):
     body = "\n".join(fake_messages).encode()
-    return 200, {"Content-Type": "text/plain"}, body
+    return 200, {"Content-Type": "text/plain; charset=utf-8"}, body
 
 
 def handle_post_messages(req_dict : dict):  
@@ -94,7 +94,7 @@ def handle_post_messages(req_dict : dict):
     return 201, {}, b"message received"
 
 def handle_404(req_dict : dict):
-    return 404, {"Content-Type": "text/plain"}, b"not found"
+    return 404, {"Content-Type": "text/plain; charset=utf-8"}, b"not found"
 
 def build_response(status,headers,body):
     status_phrases = {
@@ -134,7 +134,7 @@ def ws_upgrade(req_dict: dict):
     return 101, {"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Accept": accept_str}, body
 
 
-def ws_parse_frame(data: bytes) -> tuple[int, bytearray] | None:
+def ws_parse_frame(data: bytes) -> tuple[int, bytearray, int] | None:
     if len(data) < 2:
         return None  # not even the first 2 bytes yet
 

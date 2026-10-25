@@ -21,54 +21,63 @@ from http_parser import (
 )
 
 class Connection:
-    def __init__(self,sock:socket.socket):
+    def __init__(self, sock: socket.socket):
         self.sock = sock
-        self.buffer =b""
-        self.mode="http"
-        # Connection Type : skippign its keep-alive for now
-    def append(self,chunk:bytes)->None:
+        self.buffer = b""
+        self.mode = "http"
+
+    def __repr__(self) -> str:
+        try:
+            peer = self.sock.getpeername()
+        except OSError:
+            peer = "disconnected"
+        return f"<Connection peer={peer} mode={self.mode}>"
+
+    def append(self, chunk: bytes) -> None:
         self.buffer += chunk
 
-    def consume(self,count:int)->None: # Count can be passed req_dict["length"]
-        self.buffer = self.buffer[count:] 
+    def consume(self, count: int) -> None:
+        self.buffer = self.buffer[count:]
 
-    def ws_upgrade(self):
+    def upgrade_to_ws(self) -> None:
         self.mode = "ws"
-    # Send and close method , to remove the redundacy of error handling over n mover , tiny mistakes can lead to problem
 
-    def send(self,data:bytes)->bool:
-        try: 
-          self.sock.sendall(data)
-        except(BrokenPipeError,ConnectionResetError,BlockingIOError,OSError):
-           return False;
+    def send(self, data: bytes) -> bool:
+        try:
+            self.sock.sendall(data)
+        except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+            return False
         return True
 
-    def close(self,sel:selectors.DefaultSelector)->bool:
+    def close(self, sel: selectors.DefaultSelector) -> bool:
         try:
             sel.unregister(self.sock)
-        except(KeyError, ConnectionResetError, BlockingIOError, OSError):
+        except Exception:
             pass
         try:
-            self.sock.close() # Missed this :P
-        except(BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-            return False;
+            self.sock.close()
+        except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+            return False
         return True
 
 
-def shutdown_server(sel:selectors.DefaultSelector,server:socket):
+def shutdown_server(sel: selectors.DefaultSelector, server: socket.socket | None):
     print("\nShutting down — closing all connections...")
     for key in list(sel.get_map().values()):
-       if isinstance(key.data,Connection):
-            key.data.close(sel) 
-    server.close()        
+        if isinstance(key.data, Connection):
+            key.data.close(sel)
+    if server:
+        try:
+            server.close()
+        except Exception:
+            pass
     try:
         sel.close()
     except Exception:
         pass
 
-def ip_check(server:socket): # IM a bit confused in this cuz im not using a setter later on but this returns 
-    # new_connection i wonder if it will be treated as object,  earlier i was trying to initialize new_connection to none and then set values but tahts redudnadnt so is there a better way
-    new_connection, addr = server.accept() 
+def accept_connection(server: socket.socket):
+    new_connection, addr = server.accept()
     if new_connection.family == socket.AF_INET:
         print(f"Accepted connection from IPv4 address: {addr[0]}")
     elif new_connection.family == socket.AF_INET6:
@@ -132,24 +141,14 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
     try:
         while stop_event is None or not stop_event.is_set():
             events = sel.select(timeout=0.1)
-            # select till timeout occurs
-            for key, _  in events: #(Events: (fileobj,EVENT) , data)
-                if key.data == "listener": #(if im the server listening for sockets)
-                    new_sock_for_comms, addr = ip_check(key.fileobj) # In the function protoype we are passing a socket , but accept is happening due to server socket
-                    # so uh how will be accept it i havent really referenced the global server_socket anywhere or it has been referenced by itself in python?
-                    new_sock_for_comms.sock.setblocking(False) #(assigning a new socket fd that communicates with others)
-                    sel.register(new_sock_for_comms.sock, selectors.EVENT_READ, new_sock_for_comms)
-                # Shelved for future improvement admin perms :>
-                # elif key.data == "stdin": #(if the server wants to send data)
-                #   line = sys.stdin.readline() 
-                #   for other_key in list(sel.get_map().values()):#(list all the fds in selectors)
-                #      if isinstance(other_key.data, dict):#(if a socket has a dict its a listener send all data)
-                #         other_key.fileobj.sendall(line.encode())
+            for key, _ in events:
+                if key.data == "listener":
+                    conn, addr = accept_connection(key.fileobj)
+                    conn.sock.setblocking(False)
+                    sel.register(conn.sock, selectors.EVENT_READ, data=conn)
 
                 else:
                     conn = key.data
-                    conn.sock = key.fileobj 
-                    #assign client socket | i dont think i need to resassign socket to fileobj but well i see about this in review
 
                     try:
                         chunk = conn.sock.recv(1024)
@@ -160,54 +159,42 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                         conn.close(sel)
                         continue
 
-                    conn.append(chunk) #(defined function)
-                     # keep on recovering data from the client till all data received 
-                    if conn.mode== "ws":
-                        # WS SUPPORT AFTER CONNECTION UPGRADE
-                        # buffer may hold more than one frame back to back
+                    conn.append(chunk)
+                    if conn.mode == "ws":
                         while True:
                             result = ws_parse_frame(conn.buffer)
                             if result is None:
-                                break  # not a full frame yet — wait for next recv()
+                                break
 
                             opcode, payload, consumed_bytes = result
                             conn.consume(consumed_bytes)
 
                             if opcode == 0x8:  # close
-                                try: # im wondering if i need to remove these byte blocks cuz error handling has be done for functions under Connection clase but not functions in http_parser.py
-                                    conn.send(ws_build_frame(0x8, b""))
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    pass
+                                conn.send(ws_build_frame(0x8, b""))
                                 conn.close(sel)
                                 break
                             elif opcode == 0x9:  # ping
-                                try:
-                                    conn.send(ws_build_frame(0xA, payload)) # pong :3
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+                                if not conn.send(ws_build_frame(0xA, payload)):
                                     conn.close(sel)
                                     break
                             elif opcode in (0x1, 0x2):  # text/binary
-                                print(f"ws payload from {conn}: {bytes(payload)!r}") # dont understand this line its a dictionary right ~ need to return object.buffer here but uh whats this line explin
+                                print(f"ws payload from {conn}: {bytes(payload)!r}")
                                 frame = ws_build_frame(opcode, bytes(payload))
                                 ws_broadcast(sel, frame)
 
                     else:
                         while True:
                             try:
-                                req_dict = http_handler(conn.buffer)  # Drain all complete requests from buffer
+                                req_dict = http_handler(conn.buffer)
                             except HttpError as err:
-                                try:
-                                    err_resp = build_response(err.status_code, {"Content-Type": "text/plain", "Connection": "close"}, err.message.encode() if err.message else b"Bad Request")
-                                    conn.send(err_resp)
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    pass
+                                err_resp = build_response(err.status_code, {"Content-Type": "text/plain; charset=utf-8", "Connection": "close"}, err.message.encode() if err.message else b"Bad Request")
+                                conn.send(err_resp)
                                 conn.close(sel)
                                 break
 
                             if req_dict is None:
-                                break  # Incomplete request or buffer empty — wait for next recv()
+                                break
 
-                           # conn["buffer"] = conn["buffer"][req_dict["length"]:]
                             conn.consume(req_dict["length"])
 
                             if is_ws(req_dict):
@@ -217,27 +204,27 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                                 if not conn.send(response):
                                     conn.close(sel)
 
-                                conn.ws_upgrade()
-                                break  # Upgraded to WebSocket, exit HTTP drain loop
+                                conn.upgrade_to_ws()
+                                break
                             else:
-                                method = req_dict["method"].decode(errors="replace") #yo whats this first time seeing this
+                                method = req_dict["method"].decode(errors="replace")
                                 path = req_dict["path"]
-                                handler_func = routes_dict.get((method, path), handle_404) # FAIK i think there is a better way for routes than a hardcoded dispatch table , like a loop import OS check if path exists type shiiii , but dk how that works yet
+                                handler_func = routes_dict.get((method, path), handle_404)
                                 try:
                                     status, headers, body = handler_func(req_dict)
                                     response = build_response(status, headers, body)
                                 except Exception:
-                                    traceback.print_exc() #no idea suck at error handling
-                                    err_resp = build_response(500, {"Content-Type": "text/plain", "Connection": "close"}, b"Internal Server Error")
+                                    traceback.print_exc()
+                                    err_resp = build_response(500, {"Content-Type": "text/plain; charset=utf-8", "Connection": "close"}, b"Internal Server Error")
                                     conn.send(err_resp)
-                                    pass
                                     conn.close(sel)
                                     break
 
                                 if not conn.send(response):
-                                  conn.close(sel)
-                                  break
-                                # fulfil req and send response to user
+                                    conn.close(sel)
+                                    break
+    except KeyboardInterrupt:
+        print("\nServer interrupted by user.")
     finally:
         shutdown_server(sel, server_socket)
 # Is this optimal tho , everything is in a single loop

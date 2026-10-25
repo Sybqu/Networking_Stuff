@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / editor files
+tempCodeRunnerFile.py
+*.testing_backup
+.vscode/
+.idea/
+
+# Compiled C binaries
+gc_Server
+simple_stream_server
+*.exe
+*.o
+*.out

@@ -43,9 +43,10 @@ Persistence                                              NOT STARTED (in-memory 
 
 ### Files
 
-- **`serv.py`** — owns all networking: dual-stack (IPv4/IPv6) socket setup via `getaddrinfo`, the `selectors`-based event loop, accepting connections, per-connection buffering, dispatching to either HTTP or WS handling based on a per-connection `mode` flag, crash isolation, and connection teardown.
+- **`serv.py`** — owns all networking: dual-stack (IPv4/IPv6) socket setup via `getaddrinfo`, the `Connection` object encapsulating client socket state/buffer/lifecycle, the `selectors`-based event loop, crash isolation, and teardown.
 - **`http_parser.py`** — pure logic, strictly no sockets. HTTP request parsing, RFC 9112 validation, response building with extended reason phrases, route handlers, the WS handshake math (SHA-1 + base64 of the `Sec-WebSocket-Key`), and the WS frame parser/builder.
-- **`test_server.py`** — 12 end-to-end integration tests speaking raw wire TCP bytes against a running server.
+- **`test_server.py`** — 13 end-to-end integration tests speaking raw wire TCP bytes against a running server.
+- **`KNOWN_ISSUES.md`** — security hardening roadmap, known RFC edge cases, and CVE documentation.
 
 ### What's Built and Working (Fixed Guardrails)
 
@@ -82,7 +83,7 @@ Persistence                                              NOT STARTED (in-memory 
 
 ### Running the Test Suite
 
-Run the 12 raw-socket integration tests from the project directory:
+Run the 13 raw-socket integration tests from the project directory:
 
 ```bash
 python -m unittest test_server.py
@@ -101,3 +102,4 @@ Tests cover:
 10. Handler raising an unhandled exception -> 500 response, server remains alive.
 11. Missing template file (`index.html`) -> 500 response, server remains alive.
 12. Abrupt client disconnect mid-response -> send error trapped, server remains alive.
+13. Live multi-client WebSocket broadcast with disconnect isolation.
