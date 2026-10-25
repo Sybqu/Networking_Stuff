@@ -32,7 +32,7 @@ class Connection:
     def consume(self,count:int)->None: # Count can be passed req_dict["length"]
         self.buffer = self.buffer[count:] 
 
-    def Upgrade_WS(self):
+    def ws_upgrade(self):
         self.mode = "ws"
     # Send and close method , to remove the redundacy of error handling over n mover , tiny mistakes can lead to problem
 
@@ -133,7 +133,7 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
         while stop_event is None or not stop_event.is_set():
             events = sel.select(timeout=0.1)
             # select till timeout occurs
-            for key, _ , mask in events: #(fileobj , events , data)
+            for key, _  in events: #(Events: (fileobj,EVENT) , data)
                 if key.data == "listener": #(if im the server listening for sockets)
                     new_sock_for_comms, addr = ip_check(key.fileobj) # In the function protoype we are passing a socket , but accept is happening due to server socket
                     # so uh how will be accept it i havent really referenced the global server_socket anywhere or it has been referenced by itself in python?
@@ -157,7 +157,7 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                         chunk = b""
 
                     if not chunk:
-                        conn.sock.close(sel)
+                        conn.close(sel)
                         continue
 
                     conn.append(chunk) #(defined function)
@@ -207,44 +207,40 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                             if req_dict is None:
                                 break  # Incomplete request or buffer empty — wait for next recv()
 
-                            conn["buffer"] = conn["buffer"][req_dict["length"]:]
+                           # conn["buffer"] = conn["buffer"][req_dict["length"]:]
+                            conn.consume(req_dict["length"])
 
                             if is_ws(req_dict):
                                 status, headers, body = ws_upgrade(req_dict)
                                 response = build_response(status, headers, body)
-                                try:
-                                    client_sock.sendall(response)
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    close_client(sel, client_sock)
-                                    break
-                                conn["mode"] = "ws"
+
+                                if not conn.send(response):
+                                    conn.close(sel)
+
+                                conn.ws_upgrade()
                                 break  # Upgraded to WebSocket, exit HTTP drain loop
                             else:
-                                method = req_dict["method"].decode(errors="replace")
+                                method = req_dict["method"].decode(errors="replace") #yo whats this first time seeing this
                                 path = req_dict["path"]
-                                handler_func = routes_dict.get((method, path), handle_404)
+                                handler_func = routes_dict.get((method, path), handle_404) # FAIK i think there is a better way for routes than a hardcoded dispatch table , like a loop import OS check if path exists type shiiii , but dk how that works yet
                                 try:
                                     status, headers, body = handler_func(req_dict)
                                     response = build_response(status, headers, body)
                                 except Exception:
-                                    traceback.print_exc()
-                                    try:
-                                        err_resp = build_response(500, {"Content-Type": "text/plain", "Connection": "close"}, b"Internal Server Error")
-                                        client_sock.sendall(err_resp)
-                                    except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                        pass
-                                    close_client(sel, client_sock)
+                                    traceback.print_exc() #no idea suck at error handling
+                                    err_resp = build_response(500, {"Content-Type": "text/plain", "Connection": "close"}, b"Internal Server Error")
+                                    conn.send(err_resp)
+                                    pass
+                                    conn.close(sel)
                                     break
 
-                                try:
-                                    client_sock.sendall(response)
-                                except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    close_client(sel, client_sock)
-                                    break
+                                if not conn.send(response):
+                                  conn.close(sel)
+                                  break
                                 # fulfil req and send response to user
     finally:
         shutdown_server(sel, server_socket)
-
+# Is this optimal tho , everything is in a single loop
 def main():
     run_server(HOST, PORT)
 
