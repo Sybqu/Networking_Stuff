@@ -32,52 +32,65 @@ class Connection:
     def consume(self,count:int)->None: # Count can be passed req_dict["length"]
         self.buffer = self.buffer[count:] 
 
-    def Upgrade_Ws(self):
+    def Upgrade_WS(self):
         self.mode = "ws"
-            
+    # Send and close method , to remove the redundacy of error handling over n mover , tiny mistakes can lead to problem
+
+    def send(self,data:bytes)->bool:
+        try: 
+          self.sock.sendall(data)
+        except(BrokenPipeError,ConnectionResetError,BlockingIOError,OSError):
+           return False;
+        return True
+
+    def close(self,sel:selectors.DefaultSelector)->bool:
+        try:
+            sel.unregister(self.sock)
+        except(KeyError, ConnectionResetError, BlockingIOError, OSError):
+            pass
+        try:
+            self.sock.close() # Missed this :P
+        except(BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
+            return False;
+        return True
 
 
-
-
-
-def shutdown_server(sel, server_socket):
+def shutdown_server(sel:selectors.DefaultSelector,server:socket):
     print("\nShutting down — closing all connections...")
     for key in list(sel.get_map().values()):
-        if isinstance(key.data, dict):
-            key.fileobj.close()
-    try:
-        server_socket.close()
-    except Exception:
-        pass
+       if isinstance(key.data,Connection):
+            key.data.close(sel)
+    server.close()        
     try:
         sel.close()
     except Exception:
         pass
 
-def ip_check(server_socket):
-    new_Sock, addr = server_socket.accept()
-    if new_Sock.family == socket.AF_INET:
+def ip_check(server:socket): # IM a bit confused in this cuz im not using a setter later on but this returns 
+    # new_connection i wonder if it will be treated as object,  earlier i was trying to initialize new_connection to none and then set values but tahts redudnadnt so is there a better way
+    new_connection, addr = server.accept() 
+    if new_connection.family == socket.AF_INET:
         print(f"Accepted connection from IPv4 address: {addr[0]}")
-    elif new_Sock.family == socket.AF_INET6:
+    elif new_connection.family == socket.AF_INET6:
         print(f"Accepted connection from IPv6 address: {addr[0]}")
-    return new_Sock, addr
+    return Connection(new_connection), addr
 
-def set_up(host=HOST, port=PORT):
-    new_socket = None
+def set_up(host=HOST, port=PORT): #Server setup afaik?
+    server_socket = None
     addr_info = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE)
     for family, socktype, proto, canonname, sockaddr in addr_info:
         try:
-            new_socket = socket.socket(family, socktype, proto)
-            new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            new_socket.bind(sockaddr)
-            new_socket.listen(5)
+            server_socket = socket.socket(family, socktype, proto)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind(sockaddr)
+            server_socket.listen(5)
             print(f"Listening on {sockaddr} (Family: {family.name})")
             break
         except OSError:
-            if new_socket:
-                new_socket.close()
-            new_socket = None
-    return new_socket
+            if server_socket:
+                server_socket.close()
+            server_socket = None
+    return server_socket
 
 # DISPATCH TABLE FOR HANDLING , CAN I USE? UHM OOPS HERE ITS PREFERED AFAIK
 routes_dict = {
@@ -86,25 +99,16 @@ routes_dict = {
     ("POST", b"/messages"): handle_post_messages,
 }
 
-def close_client(sel, client_sock):
-    try:
-        sel.unregister(client_sock)
-    except Exception:
-        pass
-    try:
-        client_sock.close()
-    except Exception:
-        pass
 
-def ws_broadcast(sel, frame):
+
+def ws_broadcast(sel:selectors.DefaultSelector, frame:bytes):
     # Broadcast WebSocket frame to all connected clients in WebSocket mode
     for key in list(sel.get_map().values()):
-        if isinstance(key.data, dict) and key.data.get("mode") == "ws":
-            peer_sock = key.fileobj
-            try:
-                peer_sock.sendall(frame)
-            except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                close_client(sel, peer_sock)
+        if isinstance(key.data, Connection) and key.data.mode== "ws":
+           # peer_sock = Connection(key.fileobj,buffer="",mode="ws")
+           peer_sock = key.data
+           if not peer_sock.send(frame):
+                        peer_sock.close(sel)
 
 def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
     server_socket = set_up(host, port)
@@ -129,9 +133,10 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
         while stop_event is None or not stop_event.is_set():
             events = sel.select(timeout=0.1)
             # select till timeout occurs
-            for key, _ in events: #(events : fileobj , events , data)
+            for key, _ , mask in events: #(fileobj , events , data)
                 if key.data == "listener": #(if im the server listening for sockets)
-                    new_sock_for_comms, addr = ip_check(key.fileobj)
+                    new_sock_for_comms, addr = ip_check(key.fileobj) # In the function protoype we are passing a socket , but accept is happening due to server socket
+                    # so uh how will be accept it i havent really referenced the global server_socket anywhere or it has been referenced by itself in python?
                     new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
                     sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
                 # Shelved for future improvement admin perms :>
