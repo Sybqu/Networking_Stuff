@@ -59,7 +59,7 @@ def shutdown_server(sel:selectors.DefaultSelector,server:socket):
     print("\nShutting down — closing all connections...")
     for key in list(sel.get_map().values()):
        if isinstance(key.data,Connection):
-            key.data.close(sel)
+            key.data.close(sel) 
     server.close()        
     try:
         sel.close()
@@ -137,8 +137,8 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
                 if key.data == "listener": #(if im the server listening for sockets)
                     new_sock_for_comms, addr = ip_check(key.fileobj) # In the function protoype we are passing a socket , but accept is happening due to server socket
                     # so uh how will be accept it i havent really referenced the global server_socket anywhere or it has been referenced by itself in python?
-                    new_sock_for_comms.setblocking(False) #(assigning a new socket fd that communicates with others)
-                    sel.register(new_sock_for_comms, selectors.EVENT_READ, data={"buffer": b""})
+                    new_sock_for_comms.sock.setblocking(False) #(assigning a new socket fd that communicates with others)
+                    sel.register(new_sock_for_comms.sock, selectors.EVENT_READ, new_sock_for_comms)
                 # Shelved for future improvement admin perms :>
                 # elif key.data == "stdin": #(if the server wants to send data)
                 #   line = sys.stdin.readline() 
@@ -148,60 +148,60 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
 
                 else:
                     conn = key.data
-                    client_sock = key.fileobj
-                    #assign client socket
+                    conn.sock = key.fileobj 
+                    #assign client socket | i dont think i need to resassign socket to fileobj but well i see about this in review
 
                     try:
-                        chunk = client_sock.recv(1024)
+                        chunk = conn.sock.recv(1024)
                     except (ConnectionResetError, BrokenPipeError, OSError):
                         chunk = b""
 
                     if not chunk:
-                        close_client(sel, client_sock)
+                        conn.sock.close(sel)
                         continue
 
-                    conn["buffer"] += chunk
+                    conn.append(chunk) #(defined function)
                      # keep on recovering data from the client till all data received 
-                    if conn.get("mode") == "ws":
+                    if conn.mode== "ws":
                         # WS SUPPORT AFTER CONNECTION UPGRADE
                         # buffer may hold more than one frame back to back
                         while True:
-                            result = ws_parse_frame(conn["buffer"])
+                            result = ws_parse_frame(conn.buffer)
                             if result is None:
                                 break  # not a full frame yet — wait for next recv()
 
-                            opcode, payload, consumed = result
-                            conn["buffer"] = conn["buffer"][consumed:]  # drop what we just parsed
+                            opcode, payload, consumed_bytes = result
+                            conn.consume(consumed_bytes)
 
                             if opcode == 0x8:  # close
-                                try:
-                                    client_sock.sendall(ws_build_frame(0x8, b""))
+                                try: # im wondering if i need to remove these byte blocks cuz error handling has be done for functions under Connection clase but not functions in http_parser.py
+                                    conn.send(ws_build_frame(0x8, b""))
                                 except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
                                     pass
-                                close_client(sel, client_sock)
+                                conn.close(sel)
                                 break
                             elif opcode == 0x9:  # ping
                                 try:
-                                    client_sock.sendall(ws_build_frame(0xA, payload))
+                                    conn.send(ws_build_frame(0xA, payload)) # pong :3
                                 except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
-                                    close_client(sel, client_sock)
+                                    conn.close(sel)
                                     break
                             elif opcode in (0x1, 0x2):  # text/binary
-                                print(f"ws payload from {client_sock}: {bytes(payload)!r}")
+                                print(f"ws payload from {conn}: {bytes(payload)!r}") # dont understand this line its a dictionary right ~ need to return object.buffer here but uh whats this line explin
                                 frame = ws_build_frame(opcode, bytes(payload))
                                 ws_broadcast(sel, frame)
 
                     else:
                         while True:
                             try:
-                                req_dict = http_handler(conn["buffer"])  # Drain all complete requests from buffer
+                                req_dict = http_handler(conn.buffer)  # Drain all complete requests from buffer
                             except HttpError as err:
                                 try:
                                     err_resp = build_response(err.status_code, {"Content-Type": "text/plain", "Connection": "close"}, err.message.encode() if err.message else b"Bad Request")
-                                    client_sock.sendall(err_resp)
+                                    conn.send(err_resp)
                                 except (BrokenPipeError, ConnectionResetError, BlockingIOError, OSError):
                                     pass
-                                close_client(sel, client_sock)
+                                conn.close(sel)
                                 break
 
                             if req_dict is None:
