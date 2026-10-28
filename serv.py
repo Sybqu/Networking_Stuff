@@ -77,12 +77,15 @@ def shutdown_server(sel: selectors.DefaultSelector, server: socket.socket | None
         pass
 
 def accept_connection(server: socket.socket):
-    new_connection, addr = server.accept()
-    if new_connection.family == socket.AF_INET:
+  try:
+      new_connection, addr = server.accept()
+      if new_connection.family == socket.AF_INET:
         print(f"Accepted connection from IPv4 address: {addr[0]}")
-    elif new_connection.family == socket.AF_INET6:
+      elif new_connection.family == socket.AF_INET6:
         print(f"Accepted connection from IPv6 address: {addr[0]}")
-    return Connection(new_connection), addr
+  except(OSError):
+       return None,None;
+  return Connection(new_connection), addr
 
 def set_up(host=HOST, port=PORT): #Server setup afaik?
     server_socket = None
@@ -130,7 +133,7 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
     actual_port = server_socket.getsockname()[1]
     sel = selectors.DefaultSelector()
     # sel.register(sys.stdin, selectors.EVENT_READ, data="stdin")
-    sel.register(server_socket, selectors.EVENT_READ, data="listener")
+    sel.register(server_socket, selectors.EVENT_READ, data="listener") #
     # Register server socket at idx1 (optional)
 
     if ready_event:
@@ -144,6 +147,8 @@ def run_server(host=HOST, port=PORT, ready_event=None, stop_event=None):
             for key, _ in events:
                 if key.data == "listener":
                     conn, addr = accept_connection(key.fileobj)
+                    if not conn or not addr :
+                        continue;                       
                     conn.sock.setblocking(False)
                     sel.register(conn.sock, selectors.EVENT_READ, data=conn)
 
