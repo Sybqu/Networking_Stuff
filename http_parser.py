@@ -16,16 +16,14 @@ def http_handler(request: bytes) -> dict | None:
     header_end_idx = request.find(b"\r\n\r\n")
 
     if header_end_idx == -1:
-        if len(request)>MAX_HEADER_SIZE:
-            raise HttpError(431,"Limit Exceeded")
+        if len(request) > MAX_HEADER_SIZE:
+            raise HttpError(431, "Limit Exceeded")
         return None    
     if header_end_idx > MAX_HEADER_SIZE:
-        raise HttpError(431,"Fields too large")    
-    
+        raise HttpError(431, "Fields too large")    
 
     req = request.split(b"\r\n")
-    header_end_idx = request.find(b"\r\n\r\n")
-    req_len = header_end_idx+4
+    req_len = header_end_idx + 4
 
     if not req[0].strip():
         raise HttpError(400, "Empty request line")
@@ -74,8 +72,12 @@ def http_handler(request: bytes) -> dict | None:
         if not cl_val or not cl_val.isdigit():
             raise HttpError(400, "Content-Length must contain only ASCII digits")
 
+        # RFC 9112 & CVE-2020-10735: Guard against quadratic string-to-int parsing DoS
+        if len(cl_val) > 10:
+            raise HttpError(400, "Content-Length value exceeds maximum digit length")
+
         body_len = int(cl_val)
-        body_post = request[header_end_idx:]
+        body_post = request[header_end_idx + 4:]
 
         if len(body_post) < body_len:
             return None  # body hasn't fully arrived yet — wait for more recv()
@@ -202,24 +204,3 @@ def ws_build_frame(opcode: int, payload: bytes) -> bytes:
         header = bytes([byte0, 127]) + struct.pack(">Q", length)
 
     return header + payload
-
-
-
-
-
-
-
-## OOPS approach?
-
-
-
-
-
-
-
-
-
-
-
-
-

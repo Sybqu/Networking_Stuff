@@ -119,9 +119,9 @@ class TestRawSocketServer(unittest.TestCase):
             data = self.read_all(s, timeout=1.0)
             self.assertIn(b"400", data, f"Expected 400 for duplicate Content-Length, got: {data!r}")
 
-    # 6. Content-Length of -5, abc, 1_0, +5 -> 400
+    # 6. Content-Length of -5, abc, 1_0, +5, >10 digits, >4300 digits (CVE-2020-10735) -> 400
     def test_06_invalid_content_length_values(self):
-        invalid_lengths = [b"-5", b"abc", b"1_0", b"+5"]
+        invalid_lengths = [b"-5", b"abc", b"1_0", b"+5", b"9" * 15, b"9" * 5000]
         for val in invalid_lengths:
             with self.subTest(val=val):
                 with self.connect_client() as s:

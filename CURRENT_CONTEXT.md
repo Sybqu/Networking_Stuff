@@ -33,6 +33,7 @@ http_parser.py (Pure Protocol Logic — No Sockets)
   │     ├── Header-driven body consumption (Content-Length driven, not method driven)
   │     ├── Rejects duplicate Content-Length headers (400)
   │     ├── ASCII digit validation for Content-Length (rejects +5, -5, 1_0, abc)
+  │     ├── Content-Length digit cap (len <= 10, rejects >10 digits and >4300 digits CVE-2020-10735 DoS)
   │     ├── Header buffer bounds check: MAX_HEADER_SIZE = 8192 (431 Slowloris defense)
   │     └── Rejects Transfer-Encoding with 501 Not Implemented
   ├── REST Dispatch Table: routes_dict = {("GET", b"/"): handle_index, ...}
@@ -71,10 +72,10 @@ python -m unittest Networking_Stuff/test_server.py
 
 ## 4. Prioritized Roadmap
 
-### Tier 0: Immediate Hardening (~1 hour)
+### Tier 0: Immediate Hardening (COMPLETED)
 1. **`accept()` Guard (COMPLETED 2026-10-28):** Wrapped `server.accept()` in `try/except OSError` inside `accept_connection()` returning `(None, None)`, checked with `if not conn or not addr: continue` inside `run_server()`. Prevents `EMFILE` / `ECONNABORTED` from killing the listener.
 2. **Header Buffer Limit (431) (COMPLETED 2026-10-30):** Enforced `MAX_HEADER_SIZE = 8192` in `http_handler()`. If `\r\n\r\n` is not encountered within that limit or if header boundary exceeds 8KB, raises `HttpError(431, "Limit Exceeded")`. Tested with slowloris and oversized header streams (Test 14).
-3. **Content-Length Digit Cap (413 / 400):** Validate `len(cl_val) <= 10` before `int(cl_val)` to prevent Python CVE-2020-10735 quadratic parsing DoS.
+3. **Content-Length Digit Cap (400) (COMPLETED 2026-10-30):** Validate `len(cl_val) <= 10` before `int(cl_val)` to prevent Python CVE-2020-10735 quadratic parsing DoS and unhandled `ValueError`. Tested with >10 digits and 5,000 digits (Test 6).
 
 ### Tier 1: Known Issues & Security (Deferred until public tunneling)
 * Documented in [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md):
