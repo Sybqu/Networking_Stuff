@@ -3,19 +3,29 @@ import base64
 import hashlib
 import struct
 
+MAX_HEADER_SIZE = 8192
+
 class HttpError(Exception):
     def __init__(self, status_code: int, message: str = ""):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
 
+
 def http_handler(request: bytes) -> dict | None:
-    if b"\r\n\r\n" not in request:
-        return None
+    header_end_idx = request.find(b"\r\n\r\n")
+
+    if header_end_idx == -1:
+        if len(request)>MAX_HEADER_SIZE:
+            raise HttpError(431,"Limit Exceeded")
+        return None    
+    if header_end_idx > MAX_HEADER_SIZE:
+        raise HttpError(431,"Fields too large")    
+    
 
     req = request.split(b"\r\n")
-    header_end_idx = request.find(b"\r\n\r\n") + 4
-    req_len = header_end_idx
+    header_end_idx = request.find(b"\r\n\r\n")
+    req_len = header_end_idx+4
 
     if not req[0].strip():
         raise HttpError(400, "Empty request line")

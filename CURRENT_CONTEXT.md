@@ -1,6 +1,6 @@
 # Current Project Context & Architecture State
 
-**Last Updated:** 2026-10-26  
+**Last Updated:** 2026-10-30  
 **Repository:** [Networking_Stuff](https://github.com/Sybqu/Networking_Stuff)  
 **Goal:** A high-performance, browser-based chat server with live WebSockets, built from first principles using Python's raw `socket` and `selectors` modules (no `http.server`, Flask, or external web frameworks).
 
@@ -33,6 +33,7 @@ http_parser.py (Pure Protocol Logic — No Sockets)
   │     ├── Header-driven body consumption (Content-Length driven, not method driven)
   │     ├── Rejects duplicate Content-Length headers (400)
   │     ├── ASCII digit validation for Content-Length (rejects +5, -5, 1_0, abc)
+  │     ├── Header buffer bounds check: MAX_HEADER_SIZE = 8192 (431 Slowloris defense)
   │     └── Rejects Transfer-Encoding with 501 Not Implemented
   ├── REST Dispatch Table: routes_dict = {("GET", b"/"): handle_index, ...}
   ├── Extended Reason Phrases: 101, 200, 201, 400, 404, 405, 411, 413, 431, 500, 501
@@ -60,19 +61,19 @@ http_parser.py (Pure Protocol Logic — No Sockets)
 
 ## 3. Test Suite
 
-The test suite runs 13 end-to-end wire tests against raw TCP sockets:
+The test suite runs 14 end-to-end wire tests against raw TCP sockets:
 ```bash
 python -m unittest Networking_Stuff/test_server.py
 ```
-**Current Status:** `Ran 13 tests ... OK` (100% passing).
+**Current Status:** `Ran 14 tests ... OK` (100% passing).
 
 ---
 
 ## 4. Prioritized Roadmap
 
 ### Tier 0: Immediate Hardening (~1 hour)
-1. **`accept()` Guard:** Wrap `server.accept()` in `try/except (BlockingIOError, InterruptedError, OSError)` inside `accept_connection()` so kernel resource limits (`EMFILE`) do not kill the main listener.
-2. **Header Buffer Limit (431):** Enforce an 8KB / 16KB limit in `http_handler()`. If `\r\n\r\n` is not encountered within that limit, raise `HttpError(431, "Request Header Fields Too Large")`.
+1. **`accept()` Guard (COMPLETED 2026-10-28):** Wrapped `server.accept()` in `try/except OSError` inside `accept_connection()` returning `(None, None)`, checked with `if not conn or not addr: continue` inside `run_server()`. Prevents `EMFILE` / `ECONNABORTED` from killing the listener.
+2. **Header Buffer Limit (431) (COMPLETED 2026-10-30):** Enforced `MAX_HEADER_SIZE = 8192` in `http_handler()`. If `\r\n\r\n` is not encountered within that limit or if header boundary exceeds 8KB, raises `HttpError(431, "Limit Exceeded")`. Tested with slowloris and oversized header streams (Test 14).
 3. **Content-Length Digit Cap (413 / 400):** Validate `len(cl_val) <= 10` before `int(cl_val)` to prevent Python CVE-2020-10735 quadratic parsing DoS.
 
 ### Tier 1: Known Issues & Security (Deferred until public tunneling)

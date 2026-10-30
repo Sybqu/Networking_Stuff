@@ -284,6 +284,28 @@ class TestRawSocketServer(unittest.TestCase):
             s1.close()
             s2.close()
 
+    # 14. header fields too large (> 8192) -> 431, server alive
+    def test_14_header_fields_too_large(self):
+        # Case A: Unterminated slowloris flood (> 8192 bytes with no \r\n\r\n)
+        with self.connect_client() as s:
+            req = b"GET / HTTP/1.1\r\nX-Junk: " + (b"A" * 9000)
+            s.sendall(req)
+            data = self.read_all(s, timeout=1.0)
+            self.assertIn(b"431", data, f"Expected 431 for unterminated header flood, got: {data!r}")
+
+        # Case B: Terminated header exceeding limit
+        with self.connect_client() as s:
+            req = b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Long: " + (b"B" * 9000) + b"\r\n\r\n"
+            s.sendall(req)
+            data = self.read_all(s, timeout=1.0)
+            self.assertIn(b"431", data, f"Expected 431 for oversized header, got: {data!r}")
+
+        # Server must still be alive
+        with self.connect_client() as s2:
+            s2.sendall(b"GET /messages HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            data2 = self.read_all(s2, timeout=1.0)
+            self.assertIn(b"HTTP/1.1 200 OK", data2)
+
 
 if __name__ == "__main__":
     unittest.main()
