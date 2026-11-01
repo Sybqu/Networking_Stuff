@@ -1,3 +1,4 @@
+import os
 import socket
 import sys
 import selectors
@@ -6,12 +7,14 @@ import traceback
 HOST = 'localhost'
 PORT = 3490
 
+# LOL MY DATABSE:
+fake_messages = ["Hello", "fake", "testing"]
+
 from http_parser import (
     HttpError,
     http_handler,
-    handle_index,
-    handle_get_messages,
-    handle_post_messages,
+    routes_dict,
+    route,
     handle_404,
     build_response,
     is_ws,
@@ -104,14 +107,22 @@ def set_up(host=HOST, port=PORT): #Server setup afaik?
             server_socket = None
     return server_socket
 
-# DISPATCH TABLE FOR HANDLING , CAN I USE? UHM OOPS HERE ITS PREFERED AFAIK
-routes_dict = {
-    ("GET", b"/"): handle_index,
-    ("GET", b"/messages"): handle_get_messages,
-    ("POST", b"/messages"): handle_post_messages,
-}
+@route("GET", b"/")
+def handle_index(req_dict : dict):
+    index_path = os.path.join(os.path.dirname(__file__), "index.html")
+    with open(index_path, "rb") as f:
+        body = f.read()
+    return 200, {"Content-Type": "text/html"}, body
 
+@route("GET", b"/messages")
+def handle_get_messages(req_dict : dict):
+    body = "\n".join(fake_messages).encode()
+    return 200, {"Content-Type": "text/plain; charset=utf-8"}, body
 
+@route("POST", b"/messages")
+def handle_post_messages(req_dict : dict):  
+    fake_messages.append(req_dict["body"].decode())
+    return 201, {}, b"message received"
 
 def ws_broadcast(sel:selectors.DefaultSelector, frame:bytes):
     # Broadcast WebSocket frame to all connected clients in WebSocket mode

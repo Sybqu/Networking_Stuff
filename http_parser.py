@@ -1,4 +1,3 @@
-fake_messages = ["Hello", "fake", "testing"]
 import base64
 import hashlib
 import struct
@@ -89,21 +88,6 @@ def http_handler(request: bytes) -> dict | None:
 
     return http_dict
 
-
-def handle_index(req_dict : dict):
-    with open("index.html", "rb") as f:
-        body = f.read()
-    return 200, {"Content-Type": "text/html"}, body
-
-
-def handle_get_messages(req_dict : dict):
-    body = "\n".join(fake_messages).encode()
-    return 200, {"Content-Type": "text/plain; charset=utf-8"}, body
-
-
-def handle_post_messages(req_dict : dict):  
-    fake_messages.append(req_dict["body"].decode())
-    return 201, {}, b"message received"
 
 def handle_404(req_dict : dict):
     return 404, {"Content-Type": "text/plain; charset=utf-8"}, b"not found"
@@ -204,3 +188,11 @@ def ws_build_frame(opcode: int, payload: bytes) -> bytes:
         header = bytes([byte0, 127]) + struct.pack(">Q", length)
 
     return header + payload
+
+routes_dict = {}
+def route(method: str, path:bytes):
+    def decorator(func):
+        routes_dict[(method,path)] = func 
+        return func
+    return decorator
+
