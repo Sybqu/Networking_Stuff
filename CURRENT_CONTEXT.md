@@ -1,6 +1,6 @@
 # Current Project Context & Architecture State
 
-**Last Updated:** 2026-10-30  
+**Last Updated:** 2026-11-02  
 **Repository:** [Networking_Stuff](https://github.com/Sybqu/Networking_Stuff)  
 **Goal:** A high-performance, browser-based chat server with live WebSockets, built from first principles using Python's raw `socket` and `selectors` modules (no `http.server`, Flask, or external web frameworks).
 
@@ -36,7 +36,7 @@ http_parser.py (Pure Protocol Logic — No Sockets)
   │     ├── Content-Length digit cap (len <= 10, rejects >10 digits and >4300 digits CVE-2020-10735 DoS)
   │     ├── Header buffer bounds check: MAX_HEADER_SIZE = 8192 (431 Slowloris defense)
   │     └── Rejects Transfer-Encoding with 501 Not Implemented
-  ├── REST Dispatch Table: routes_dict = {("GET", b"/"): handle_index, ...}
+  ├── REST Route Decorator: @route(method, path) auto-populating routes_dict
   ├── Extended Reason Phrases: 101, 200, 201, 400, 404, 405, 411, 413, 431, 500, 501
   └── RFC 6455 WebSocket Implementation:
         ├── ws_upgrade: SHA-1 + Base64 accept calculation (verified against RFC test vector)
@@ -86,6 +86,9 @@ python -m unittest Networking_Stuff/test_server.py
   * Honoring `Connection: close`.
 
 ### Tier 2: Frontend & Feature Upgrades
+0. **Route Decorator Registration (COMPLETED 2026-11-02):**
+   * Implemented `@route(method, path)` in `http_parser.py` populating `routes_dict` at import/startup time.
+   * Handlers decorated in `serv.py`, preserving `serv.routes_dict` for integration test harnesses.
 1. **Frontend Chat UI in [`index.html`](./index.html):**
    * Connect via `const ws = new WebSocket("ws://" + location.host);`
    * Use `element.textContent` (never `innerHTML`) to prevent XSS.
