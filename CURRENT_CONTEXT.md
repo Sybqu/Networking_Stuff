@@ -89,10 +89,10 @@ python -m unittest Networking_Stuff/test_server.py
 0. **Route Decorator Registration (COMPLETED 2026-11-02):**
    * Implemented `@route(method, path)` in `http_parser.py` populating `routes_dict` at import/startup time.
    * Handlers decorated in `serv.py`, preserving `serv.routes_dict` for integration test harnesses.
-1. **Frontend Chat UI in [`index.html`](./index.html):**
-   * Connect via `const ws = new WebSocket("ws://" + location.host);`
-   * Use `element.textContent` (never `innerHTML`) to prevent XSS.
-   * Auto-scroll message feed and connection status pill.
+1. **Frontend Test Workbench in [`index.html`](./index.html) (COMPLETED 2026-11-03):**
+   * Live HTTP REST test panel: `GET /messages` with on-screen view, `POST /messages` with 201 status feedback & auto-refresh.
+   * Full WebSocket diagnostic panel: Connect, Disconnect, connection status pill, frame transmission, and multi-client broadcast log.
+   * Safe text rendering using `textContent` for XSS prevention.
 2. **JSON Messaging & `Hub` Pattern:**
    * Structured payloads: `{"type": "chat", "user": "alice", "text": "hello"}`.
    * Central `Hub` class managing active WebSocket connections and broadcasting.
