@@ -2,20 +2,139 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>test</title>
+    <title>Server Test Workbench</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 30px auto; padding: 0 15px; }
+        .box { border: 1px solid #ccc; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 4px; min-height: 40px; }
+        input[type="text"] { padding: 6px; width: 60%; }
+        button { padding: 6px 12px; cursor: pointer; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+    </style>
 </head>
 <body>
-    <h1>server alive</h1>
+    <h1>Server Test Workbench</h1>
 
-    <input type="text" id="msgInput">
-    <button onclick="sendPost()">POST /messages</button>
-    <a href="/messages" target="_blank"><button>GET /messages</button></a>
+    <!-- HTTP REST SECTION -->
+    <div class="box">
+        <h2>1. HTTP REST API (/messages)</h2>
+        <button onclick="fetchMessages()">GET /messages</button>
+        <br><br>
+        <input type="text" id="msgInput" placeholder="Type a message to POST...">
+        <button onclick="sendPost()">POST /messages</button>
+        <p id="httpStatus"></p>
+        <strong>Messages on Server:</strong>
+        <pre id="messagesBox">Click "GET /messages" to load...</pre>
+    </div>
+
+    <!-- WEBSOCKET SECTION -->
+    <div class="box">
+        <h2>2. WebSocket Live Test</h2>
+        <p>Status: <span id="wsStatus" class="badge disconnected">Disconnected</span></p>
+        <button id="btnConnect" onclick="connectWS()">Connect WS</button>
+        <button id="btnDisconnect" onclick="disconnectWS()" disabled>Disconnect</button>
+        <br><br>
+        <input type="text" id="wsInput" placeholder="Send frame over WebSocket..." disabled>
+        <button id="btnSendWS" onclick="sendWS()" disabled>Send</button>
+        <br><br>
+        <strong>WebSocket Log:</strong>
+        <pre id="wsLog"></pre>
+    </div>
 
     <script>
+        // --- HTTP REST ---
+        function fetchMessages() {
+            fetch('/messages')
+                .then(r => {
+                    document.getElementById('httpStatus').textContent = `GET Status: ${r.status} ${r.statusText}`;
+                    return r.text();
+                })
+                .then(text => {
+                    document.getElementById('messagesBox').textContent = text;
+                })
+                .catch(err => {
+                    document.getElementById('httpStatus').textContent = 'Error: ' + err;
+                });
+        }
+
         function sendPost() {
-            const text = document.getElementById('msgInput').value;
+            const input = document.getElementById('msgInput');
+            const text = input.value;
+            if (!text) return;
+
             fetch('/messages', { method: 'POST', body: text })
-                .then(r => console.log('status:', r.status));
+                .then(r => {
+                    document.getElementById('httpStatus').textContent = `POST Status: ${r.status} ${r.statusText}`;
+                    input.value = '';
+                    fetchMessages(); // auto-refresh list
+                })
+                .catch(err => {
+                    document.getElementById('httpStatus').textContent = 'Error: ' + err;
+                });
+        }
+
+        // Auto-load messages on page load if served over HTTP
+        if (location.protocol.startsWith('http')) {
+            fetchMessages();
+        }
+
+        // --- WEBSOCKETS ---
+        let socket = null;
+
+        function logWS(msg) {
+            const logBox = document.getElementById('wsLog');
+            logBox.textContent += msg + '\n';
+        }
+
+        function connectWS() {
+            const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+            logWS(`[CONNECTING] Connecting to ${wsUrl}...`);
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                logWS('[OPEN] WebSocket connection established (101 Switching Protocols)!');
+                document.getElementById('wsStatus').textContent = 'Connected';
+                document.getElementById('wsStatus').className = 'badge connected';
+                document.getElementById('btnConnect').disabled = true;
+                document.getElementById('btnDisconnect').disabled = false;
+                document.getElementById('wsInput').disabled = false;
+                document.getElementById('btnSendWS').disabled = false;
+            };
+
+            socket.onmessage = (event) => {
+                logWS(`[RECV] Broadcast from server: ${event.data}`);
+            };
+
+            socket.onclose = (event) => {
+                logWS(`[CLOSE] Disconnected (code: ${event.code})`);
+                document.getElementById('wsStatus').textContent = 'Disconnected';
+                document.getElementById('wsStatus').className = 'badge disconnected';
+                document.getElementById('btnConnect').disabled = false;
+                document.getElementById('btnDisconnect').disabled = true;
+                document.getElementById('wsInput').disabled = true;
+                document.getElementById('btnSendWS').disabled = true;
+            };
+
+            socket.onerror = (err) => {
+                logWS('[ERROR] WebSocket error');
+            };
+        }
+
+        function disconnectWS() {
+            if (socket) {
+                socket.close();
+            }
+        }
+
+        function sendWS() {
+            const input = document.getElementById('wsInput');
+            if (socket && input.value) {
+                logWS(`[SENT] ${input.value}`);
+                socket.send(input.value);
+                input.value = '';
+            }
         }
     </script>
 </body>
